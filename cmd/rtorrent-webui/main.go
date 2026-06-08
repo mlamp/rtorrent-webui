@@ -103,10 +103,10 @@ func main() {
 		}
 	}
 	if cfg.Insight.HistoryDB != "" {
-		if h, err := history.New(cfg.Insight.HistoryDB, cfg.Insight.HistoryRetention.D()); err == nil {
+		if h, err := history.New(cfg.Insight.HistoryDB); err == nil {
 			srv.SetHistory(h)
 			poller.SetSink(h.Sample)
-			logger.Printf("history: %s (retention %s)", cfg.Insight.HistoryDB, cfg.Insight.HistoryRetention.D())
+			logger.Printf("history: %s (tiers raw 15m / 1m 24h / 1h 7d / 1d 1y)", cfg.Insight.HistoryDB)
 		} else {
 			logger.Printf("history disabled: %v", err)
 		}
