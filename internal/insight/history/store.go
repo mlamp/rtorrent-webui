@@ -17,6 +17,8 @@ package history
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"log"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -65,6 +67,142 @@ type Store struct {
 	now       func() int64
 }
 
+// schemaVersion is the version this build expects; New() applies every
+// migration up to it. Bump it and append a migration when the schema changes.
+const schemaVersion = 1
+
+// migration mutates the schema from version-1 to its version, inside a tx.
+type migration struct {
+	version int
+	name    string
+	apply   func(*sql.Tx) error
+}
+
+// migrations are applied in order; each runs in its own transaction and bumps
+// PRAGMA user_version on success. Never edit a released migration — append a new
+// one. This is the upgrade path: any older DB walks forward to schemaVersion.
+var migrations = []migration{
+	{1, "cumulative-counter baseline", func(tx *sql.Tx) error {
+		// Pre-0.2.2 DBs have a rate-based `samples` table (columns ts/hash/down/up,
+		// no `res`). Those values are instantaneous rates, incompatible with the
+		// cumulative-counter model, so there's nothing to carry over — drop it and
+		// start clean. A DB already on the new schema (res present) is left intact.
+		legacy, err := legacySamples(tx)
+		if err != nil {
+			return err
+		}
+		if legacy {
+			if _, err := tx.Exec(`DROP TABLE samples`); err != nil {
+				return err
+			}
+		}
+		_, err = tx.Exec(`
+			CREATE TABLE IF NOT EXISTS samples (
+				res  TEXT    NOT NULL,
+				hash TEXT    NOT NULL,           -- '' = global totals
+				ts   INTEGER NOT NULL,
+				down INTEGER NOT NULL,           -- cumulative bytes downloaded
+				up   INTEGER NOT NULL,           -- cumulative bytes uploaded
+				PRIMARY KEY (res, hash, ts)
+			) WITHOUT ROWID;
+			CREATE TABLE IF NOT EXISTS seen (hash TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);`)
+		return err
+	}},
+}
+
+// init guards against developer drift: migrations must be contiguous and
+// ascending from 1, and schemaVersion must equal the last one. A mismatch is a
+// programming error (a migration that would silently never run), so fail loud.
+func init() {
+	prev := 0
+	for _, m := range migrations {
+		if m.version != prev+1 {
+			panic(fmt.Sprintf("history: migrations must be contiguous ascending from 1; got v%d after v%d", m.version, prev))
+		}
+		prev = m.version
+	}
+	if prev != schemaVersion {
+		panic(fmt.Sprintf("history: schemaVersion=%d but highest migration is v%d", schemaVersion, prev))
+	}
+}
+
+// legacySamples reports whether `samples` is *positively* the pre-0.2.2 rate
+// schema (columns ts/hash/down/up, no `res`). It returns false on any doubt —
+// already-migrated, an empty/corrupt column list, or a foreign table — so we
+// NEVER DROP a table we don't recognise. Dropping only the schema we created
+// ourselves keeps data loss impossible on uncertainty.
+func legacySamples(tx *sql.Tx) (bool, error) {
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='samples'`).Scan(&n); err != nil {
+		return false, err
+	}
+	if n == 0 {
+		return false, nil // fresh DB — no table yet
+	}
+	rows, err := tx.Query(`PRAGMA table_info(samples)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		cols[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if cols["res"] {
+		return false, nil // already the new schema — keep it
+	}
+	// Require the full old shape before deciding to drop.
+	return cols["ts"] && cols["hash"] && cols["down"] && cols["up"], nil
+}
+
+// migrate walks the DB from its current PRAGMA user_version up to schemaVersion,
+// applying each pending migration transactionally. Returns the from/to versions.
+func migrate(db *sql.DB) (from, to int, err error) {
+	var v int
+	if err = db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return 0, 0, err
+	}
+	from = v
+	// Refuse a DB written by a newer build (downgrade): its schema is unknown to
+	// us, so running against it would throw opaque SQL errors. Fail clearly so the
+	// caller disables history instead of corrupting/misreading data.
+	if v > schemaVersion {
+		return v, v, fmt.Errorf("database schema v%d is newer than this build supports (v%d) — upgrade the binary", v, schemaVersion)
+	}
+	for _, m := range migrations {
+		if m.version <= v {
+			continue
+		}
+		tx, txErr := db.Begin()
+		if txErr != nil {
+			return from, v, txErr
+		}
+		if e := m.apply(tx); e != nil {
+			_ = tx.Rollback()
+			return from, v, fmt.Errorf("migration %d (%s): %w", m.version, m.name, e)
+		}
+		// user_version takes no bind params; m.version is a trusted int constant.
+		if _, e := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, m.version)); e != nil {
+			_ = tx.Rollback()
+			return from, v, e
+		}
+		if e := tx.Commit(); e != nil {
+			return from, v, e
+		}
+		v = m.version
+	}
+	return from, v, nil
+}
+
 func New(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -76,17 +214,13 @@ func New(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	if _, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS samples (
-			res  TEXT    NOT NULL,
-			hash TEXT    NOT NULL,           -- '' = global totals
-			ts   INTEGER NOT NULL,
-			down INTEGER NOT NULL,           -- cumulative bytes downloaded
-			up   INTEGER NOT NULL,           -- cumulative bytes uploaded
-			PRIMARY KEY (res, hash, ts)
-		) WITHOUT ROWID;
-		CREATE TABLE IF NOT EXISTS seen (hash TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);`); err != nil {
+	from, to, err := migrate(db)
+	if err != nil {
+		_ = db.Close()
 		return nil, err
+	}
+	if from != to {
+		log.Printf("history: schema migrated v%d -> v%d", from, to)
 	}
 	s := &Store{db: db, last: map[string][2]int64{}, now: func() int64 { return time.Now().Unix() }}
 	go s.maintainLoop()
@@ -100,7 +234,16 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 	if err != nil {
 		return
 	}
-	defer func() { _ = tx.Commit() }()
+	// Commit only on a clean run; roll back if we bail mid-way so a partial/empty
+	// transaction is never committed.
+	ok := false
+	defer func() {
+		if ok {
+			_ = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+	}()
 
 	ins, err := tx.Prepare(`INSERT OR REPLACE INTO samples(res,hash,ts,down,up) VALUES('raw',?,?,?,?)`)
 	if err != nil {
@@ -133,6 +276,7 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 			seenStmt.Close()
 		}
 	}
+	ok = true
 }
 
 func (s *Store) maintainLoop() {
