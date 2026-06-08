@@ -23,7 +23,9 @@ dirs        = ["/downloads"]       # statfs targets for /api/diskspace
 default_dir = "/downloads"
 
 [insight]
-geoip_db          = ""             # MaxMind GeoLite2-Country or DB-IP Lite mmdb; empty disables flags
+# Bundled DB-IP Lite Country (CC BY 4.0) — peer flags work out of the box.
+# Point at your own MaxMind GeoLite2-Country.mmdb instead if you prefer; empty disables.
+geoip_db          = "/usr/share/GeoIP/dbip-country-lite.mmdb"
 history_db        = "/data/history.db"  # SQLite time series; empty disables history
 history_retention = "24h"
 search_enabled    = false          # tracker-search seam (no adapters in v1)

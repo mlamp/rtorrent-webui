@@ -81,5 +81,11 @@
         No search adapters configured. This is a v1 seam — site adapters land later.
       </p>
     </section>
+
+    <p class="text-center text-xs text-muted-foreground">
+      Peer country data by
+      <a href="https://db-ip.com" target="_blank" rel="noreferrer" class="underline hover:text-foreground">DB-IP</a>
+      (CC BY 4.0)
+    </p>
   </div>
 </div>

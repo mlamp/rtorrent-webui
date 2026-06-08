@@ -1,0 +1,12 @@
+rtorrent-webui — third-party data notices
+
+IP geolocation
+--------------
+This product includes IP geolocation data created by DB-IP
+(https://db-ip.com), the "IP to Country Lite" database, licensed under the
+Creative Commons Attribution 4.0 International License (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+
+The bundled database (/usr/share/GeoIP/dbip-country-lite.mmdb) is used to map
+peer IP addresses to country flags. You may replace it with your own MaxMind
+GeoLite2-Country database via the insight.geoip_db config setting.

@@ -97,11 +97,14 @@ mode = "basic"
 Most homelab setups instead front the UI with a reverse proxy (Authelia, Cloudflare
 Access, etc.) and leave `auth.mode = "none"`.
 
-### GeoIP peer flags (optional)
+### GeoIP peer flags
 
-Not shipped (licensing). Provide a country `.mmdb` — MaxMind **GeoLite2-Country**
-(free, license key) or **DB-IP Lite Country** (no key, CC-BY) — and point
-`insight.geoip_db` at it. Without one, peers show a neutral flag.
+Works out of the box: the image bundles the **DB-IP Lite Country** database
+(CC BY 4.0, no license key) at `/usr/share/GeoIP/dbip-country-lite.mmdb`. To use
+your own MaxMind **GeoLite2-Country.mmdb** instead, mount it and set
+`insight.geoip_db`. Set it to `""` to disable.
+
+> IP geolocation data by [DB-IP](https://db-ip.com) ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). See [`NOTICE`](NOTICE).
 
 ## API (for scripting)
 

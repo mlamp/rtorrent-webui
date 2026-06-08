@@ -79,7 +79,7 @@ func Default() Config {
 		Server:   Server{Listen: ":8080"},
 		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), MaxInflight: 8, MaxUploadMB: 12},
 		Auth:     Auth{Mode: "none", Realm: "rtorrent-webui"},
-		Insight:  Insight{HistoryRetention: Duration(24 * time.Hour)},
+		Insight:  Insight{HistoryRetention: Duration(24 * time.Hour), GeoIPDB: "/usr/share/GeoIP/dbip-country-lite.mmdb"},
 		Features: Features{RPCDenylist: []string{"execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"}},
 	}
 }
