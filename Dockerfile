@@ -21,13 +21,15 @@ RUN pnpm run build   # -> /app/web/dist
 # 2) Build the Go binary with the SPA embedded (native host, cross-compiled)
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 ARG TARGETOS TARGETARCH
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=web /app/web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
-    go build -trimpath -ldflags "-s -w" -o /out/rtorrent-webui ./cmd/rtorrent-webui
+    go build -trimpath -ldflags "-s -w -X github.com/mlamp/rtorrent-webui/internal/api.Version=${VERSION}" \
+    -o /out/rtorrent-webui ./cmd/rtorrent-webui
 
 # 3) Minimal runtime
 FROM gcr.io/distroless/static-debian12:nonroot

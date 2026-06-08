@@ -17,6 +17,10 @@ import (
 	"github.com/mlamp/rtorrent-webui/web"
 )
 
+// Version is the webui build version, injected at link time
+// (-ldflags "-X github.com/mlamp/rtorrent-webui/internal/api.Version=x.y.z").
+var Version = "dev"
+
 type Server struct {
 	hub     *sse.Hub
 	rpc     *rpc.Client
@@ -88,7 +92,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	cv, _ := s.rpc.ClientVersion(ctx)
 	av, _ := s.rpc.APIVersion(ctx)
-	writeOK(w, map[string]any{"webui": "dev", "rtorrent": cv, "api": av})
+	writeOK(w, map[string]any{"webui": Version, "rtorrent": cv, "api": av})
 }
 
 func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {
