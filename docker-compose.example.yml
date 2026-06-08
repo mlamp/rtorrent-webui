@@ -1,32 +1,38 @@
-# rtorrent-webui as a sidecar to a (patched) rtorrent, sharing the SCGI socket.
+# The full lean stack: the clean rtorrent daemon + the rtorrent-webui sidecar, sharing
+# the SCGI socket. No nginx / PHP / ruTorrent. Both images are distroless and run as the
+# same nonroot uid (65532), so they share the socket with no extra permissions.
 services:
   rtorrent:
-    # The EPIPE-fixed rtorrent image (or any rtorrent exposing a unix SCGI socket).
-    image: ghcr.io/mlamp/rtorrent-rutorrent:0.16.10-scgifix
+    image: ghcr.io/mlamp/rtorrent:latest       # clean rtorrent v0.16.13 daemon (SCGI EPIPE fix baked in)
     restart: unless-stopped
     volumes:
-      - rtorrent-socket:/var/run/rtorrent   # rtorrent must: network.scgi.open_local = /var/run/rtorrent/scgi.socket
-      - ./downloads:/downloads
-    # ... your existing rtorrent ports/config ...
+      - rtorrent-socket:/run/rtorrent          # SCGI socket dir, shared with the webui
+      - rtorrent-session:/session              # rtorrent session state
+      - ./downloads:/downloads                 # download tree (must be writable by uid 65532)
+    ports:
+      - "6881:6881"                            # BitTorrent peer port (TCP)
+      - "6881:6881/udp"                        # DHT / uTP
+    # Override the baked /etc/rtorrent/rtorrent.rc by mounting your own if needed:
+    #   - ./rtorrent.rc:/etc/rtorrent/rtorrent.rc:ro
 
   webui:
     image: ghcr.io/mlamp/rtorrent-webui:latest
     restart: unless-stopped
     depends_on: [rtorrent]
+    command: ["-rtorrent", "/run/rtorrent/scgi.socket"]   # point at the shared socket
     ports:
       - "8080:8080"
-    # To let Sonarr/Radarr/… drive rtorrent through this container instead of a
-    # separate nginx scgi_pass shim, set features.rpc_proxy = true in config.toml
-    # and point the *arr clients at http://webui:8080/RPC2 (path "/RPC2").
+    # To let Sonarr/Radarr/… drive rtorrent through this container instead of a separate
+    # nginx scgi_pass shim, set features.rpc_proxy = true in config.toml and point the
+    # *arr clients at http://webui:8080/RPC2 (path "/RPC2").
     volumes:
-      - rtorrent-socket:/var/run/rtorrent      # shared SCGI socket (read-write)
+      - rtorrent-socket:/run/rtorrent          # shared SCGI socket (same nonroot uid 65532)
       - ./downloads:/downloads:ro              # for /api/diskspace (read-only is fine)
       - webui-data:/data                       # SQLite history persistence
       - ./geoip:/data/geoip:ro                 # optional: MaxMind/DB-IP mmdb for peer flags
       - ./config.toml:/etc/rtorrent-webui/config.toml:ro  # optional: override the baked config
-    # The socket and download dirs must be readable/writable by the container's
-    # nonroot user — run rtorrent with a matching uid/gid or socket perms 0o666.
 
 volumes:
   rtorrent-socket:
+  rtorrent-session:
   webui-data:

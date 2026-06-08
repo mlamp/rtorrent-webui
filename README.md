@@ -23,9 +23,12 @@ Image: **`ghcr.io/mlamp/rtorrent-webui:latest`**
 - An **rtorrent** instance exposing an **SCGI** endpoint:
   - unix socket (recommended): `network.scgi.open_local = /var/run/rtorrent/scgi.socket`, **or**
   - TCP: `network.scgi.open_port = 127.0.0.1:5000`
-- rtorrent **≥ 0.16.10**. Use the EPIPE-fixed image
-  `ghcr.io/mlamp/rtorrent-rutorrent:0.16.10-scgifix` (or v0.16.13+) so a large
-  `d.multicall` over many torrents can't peg the SCGI thread.
+- rtorrent **≥ 0.16.13** (the SCGI EPIPE busy-loop fix landed there, so a large
+  `d.multicall` over many torrents can't peg the SCGI thread). Easiest: the matching
+  clean daemon image **`ghcr.io/mlamp/rtorrent`** (distroless, built here in
+  [`../rtorrentd`](../rtorrentd)). The interim drop-in
+  `ghcr.io/mlamp/rtorrent-rutorrent:0.16.10-scgifix` (patched binary on the full crazymax
+  stack) also works.
 - Docker (for the container) — that's it. The UI speaks JSON-RPC natively; no nginx
   or PHP needed.
 
