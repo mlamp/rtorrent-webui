@@ -1,0 +1,9 @@
+# Dev rtorrent config for local webui testing.
+# TCP SCGI on :5000 (easy to reach from the host; production uses a unix socket).
+system.daemon.set = true
+session.path.set = /tmp/rt-session/
+directory.default.set = /tmp/rt-dl/
+dht.mode.set = disable
+protocol.pex.set = no
+trackers.use_udp.set = no
+network.scgi.open_port = 0.0.0.0:5000
