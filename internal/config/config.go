@@ -60,10 +60,9 @@ type Downloads struct {
 }
 
 type Insight struct {
-	GeoIPDB          string   `toml:"geoip_db"`
-	HistoryDB        string   `toml:"history_db"`
-	HistoryRetention Duration `toml:"history_retention"`
-	SearchEnabled    bool     `toml:"search_enabled"`
+	GeoIPDB       string `toml:"geoip_db"`
+	HistoryDB     string `toml:"history_db"`
+	SearchEnabled bool   `toml:"search_enabled"`
 }
 
 type Features struct {
@@ -79,7 +78,7 @@ func Default() Config {
 		Server:   Server{Listen: ":8080"},
 		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), MaxInflight: 8, MaxUploadMB: 12},
 		Auth:     Auth{Mode: "none", Realm: "rtorrent-webui"},
-		Insight:  Insight{HistoryRetention: Duration(24 * time.Hour), GeoIPDB: "/usr/share/GeoIP/dbip-country-lite.mmdb"},
+		Insight:  Insight{GeoIPDB: "/usr/share/GeoIP/dbip-country-lite.mmdb"},
 		Features: Features{RPCDenylist: []string{"execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"}},
 	}
 }

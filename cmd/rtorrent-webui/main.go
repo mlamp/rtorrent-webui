@@ -34,7 +34,6 @@ func main() {
 	view := flag.String("view", "", "override rtorrent.view")
 	geoipDB := flag.String("geoip-db", "", "override insight.geoip_db")
 	historyDB := flag.String("history-db", "", "override insight.history_db")
-	historyRet := flag.Duration("history-retention", 0, "override insight.history_retention")
 	diskDirs := flag.String("disk-dirs", "", "override downloads.dirs (comma-separated)")
 	mock := flag.Int("mock", 0, "serve N synthetic torrents instead of rtorrent (load testing)")
 	flag.Parse()
@@ -66,9 +65,6 @@ func main() {
 	}
 	if *historyDB != "" {
 		cfg.Insight.HistoryDB = *historyDB
-	}
-	if *historyRet > 0 {
-		cfg.Insight.HistoryRetention = config.Duration(*historyRet)
 	}
 	if *diskDirs != "" {
 		cfg.Downloads.Dirs = strings.Split(*diskDirs, ",")

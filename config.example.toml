@@ -27,7 +27,8 @@ default_dir = "/downloads"
 # Point at your own MaxMind GeoLite2-Country.mmdb instead if you prefer; empty disables.
 geoip_db          = "/usr/share/GeoIP/dbip-country-lite.mmdb"
 history_db        = "/data/history.db"  # SQLite time series; empty disables history
-history_retention = "24h"
+# Retention is multi-tier and fixed: raw 15m / 1m 24h / 1h 7d / 1d 1y. Stored as
+# cumulative byte counters; rates are derived at query time so gaps self-heal.
 search_enabled    = false          # tracker-search seam (no adapters in v1)
 
 [features]
