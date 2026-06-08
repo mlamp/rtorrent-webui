@@ -2,12 +2,35 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/mlamp/rtorrent-webui/internal/insight/disk"
 	"github.com/mlamp/rtorrent-webui/internal/insight/history"
 	"github.com/mlamp/rtorrent-webui/internal/insight/search"
 )
+
+// parseRange turns "15m"/"6h"/"7d"/"1w" into seconds. time.ParseDuration has no
+// day/week unit, so handle those, then fall back to it (default 1h).
+func parseRange(s string) int64 {
+	s = strings.TrimSpace(s)
+	if n := len(s); n >= 2 {
+		if u := s[n-1]; u == 'd' || u == 'w' {
+			if v, err := strconv.ParseFloat(s[:n-1], 64); err == nil && v > 0 {
+				mult := 86400.0
+				if u == 'w' {
+					mult = 7 * 86400.0
+				}
+				return int64(v * mult)
+			}
+		}
+	}
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return int64(d.Seconds())
+	}
+	return 3600
+}
 
 func (s *Server) SetDirs(dirs []string)          { s.dirs = dirs }
 func (s *Server) SetHistory(h *history.Store)     { s.history = h }
@@ -28,10 +51,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeOK(w, map[string]any{"points": []any{}})
 		return
 	}
-	rng := int64(3600)
-	if d, err := time.ParseDuration(r.URL.Query().Get("range")); err == nil && d > 0 {
-		rng = int64(d.Seconds())
-	}
+	rng := parseRange(r.URL.Query().Get("range"))
 	ctx, cancel := reqCtx(r)
 	defer cancel()
 	pts, err := s.history.Query(ctx, rng, r.URL.Query().Get("hash"))

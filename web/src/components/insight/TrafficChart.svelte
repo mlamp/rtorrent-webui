@@ -1,73 +1,174 @@
 <script lang="ts">
-  import { bytes } from '$lib/format'
+  // Relay-styled traffic chart: smooth down area + up line, labelled X/Y axes,
+  // and a hover crosshair with a date/time + rate tooltip.
+  import { short } from '$lib/format'
 
   type Point = { t: number; down: number; up: number }
-  let { points = [], height = 240 }: { points?: Point[]; height?: number } = $props()
+  let {
+    points = [],
+    height = 220,
+    range = '15m',
+    dlColor = 'var(--status-download)',
+    ulColor = 'var(--status-seed)',
+  }: { points?: Point[]; height?: number; range?: string; dlColor?: string; ulColor?: string } = $props()
 
-  let canvas = $state<HTMLCanvasElement>()
-  let width = $state(800)
+  let w = $state(700)
+  let hover = $state<number | null>(null)
+  let svgEl = $state<SVGSVGElement>()
 
-  $effect(() => {
-    const c = canvas
-    if (!c) return
-    const dpr = window.devicePixelRatio || 1
-    c.width = width * dpr
-    c.height = height * dpr
-    const ctx = c.getContext('2d')!
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, width, height)
+  const padL = 56,
+    padR = 14,
+    padT = 12,
+    padB = 26
+  const plotW = $derived(Math.max(1, w - padL - padR))
+  const plotH = $derived(Math.max(1, height - padT - padB))
+  const n = $derived(points.length)
 
-    const css = getComputedStyle(document.documentElement)
-    const cssv = (n: string) => css.getPropertyValue(n).trim() || '#888'
-    const pad = { l: 8, r: 8, t: 8, b: 8 }
-    const w = width - pad.l - pad.r
-    const h = height - pad.t - pad.b
-    const max = Math.max(1, ...points.map((p) => Math.max(p.down, p.up)))
+  // ── value (Y) axis ────────────────────────────────────────────────────────
+  function niceMax(m: number): number {
+    if (m <= 0) return 1024
+    const k = Math.floor(Math.log(m) / Math.log(1024))
+    const unit = Math.pow(1024, k)
+    const f = m / unit
+    const steps = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+    return (steps.find((s) => f <= s) ?? 1024) * unit
+  }
+  const maxVal = $derived(niceMax(Math.max(...points.map((p) => Math.max(p.down, p.up)), 1)))
+  const yTicks = $derived([0, 0.25, 0.5, 0.75, 1].map((f) => ({ f, v: maxVal * f })))
 
-    ctx.strokeStyle = cssv('--border')
-    ctx.lineWidth = 1
-    for (let i = 0; i <= 4; i++) {
-      const y = pad.t + (h * i) / 4
-      ctx.beginPath()
-      ctx.moveTo(pad.l, y)
-      ctx.lineTo(pad.l + w, y)
-      ctx.stroke()
-    }
+  // ── time (X) axis ─ derived from the actual data span (handles tier fallback)
+  const t0 = $derived(n ? points[0].t : 0)
+  const t1 = $derived(n ? points[n - 1].t : 1)
+  const span = $derived(Math.max(1, t1 - t0))
 
-    if (points.length >= 2) {
-      const x = (i: number) => pad.l + (w * i) / (points.length - 1)
-      const y = (v: number) => pad.t + h - (v / max) * h
-      const area = (key: 'down' | 'up', colorVar: string) => {
-        const col = cssv(colorVar)
-        ctx.beginPath()
-        points.forEach((p, i) => (i ? ctx.lineTo(x(i), y(p[key])) : ctx.moveTo(x(i), y(p[key]))))
-        ctx.strokeStyle = col
-        ctx.lineWidth = 1.5
-        ctx.stroke()
-        ctx.lineTo(x(points.length - 1), pad.t + h)
-        ctx.lineTo(x(0), pad.t + h)
-        ctx.closePath()
-        ctx.globalAlpha = 0.12
-        ctx.fillStyle = col
-        ctx.fill()
-        ctx.globalAlpha = 1
-      }
-      area('up', '--status-seed')
-      area('down', '--status-download')
-    }
+  const xOf = (i: number) => padL + (n < 2 ? 0 : (plotW * i) / (n - 1))
+  const yOf = (v: number) => padT + plotH - (Math.min(v, maxVal) / maxVal) * plotH
 
-    ctx.fillStyle = cssv('--muted-foreground')
-    ctx.font = '11px ui-sans-serif, system-ui'
-    ctx.fillText(`${bytes(max)}/s`, pad.l + 4, pad.t + 12)
+  function pad2(x: number) {
+    return String(x).padStart(2, '0')
+  }
+  function clock(t: number): string {
+    const d = new Date(t * 1000)
+    return span < 3 * 3600
+      ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+      : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  }
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  function fullTime(t: number): string {
+    const d = new Date(t * 1000)
+    const date = span > 24 * 3600 ? `${MON[d.getMonth()]} ${d.getDate()} ` : ''
+    return `${date}${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  }
+  // ~5 evenly-spaced X ticks by index
+  const xTicks = $derived.by(() => {
+    if (n < 2) return [] as { x: number; label: string }[]
+    const count = Math.min(5, n)
+    return Array.from({ length: count }, (_, k) => {
+      const i = Math.round((k * (n - 1)) / (count - 1))
+      return { x: xOf(i), label: clock(points[i].t) }
+    })
   })
+
+  // ── smooth (Catmull-Rom) paths ──────────────────────────────────────────────
+  function smooth(key: 'down' | 'up'): string {
+    if (n < 2) return ''
+    const p = points.map((pt, i) => [xOf(i), yOf(pt[key])] as [number, number])
+    let d = `M ${p[0][0]},${p[0][1]}`
+    for (let i = 0; i < p.length - 1; i++) {
+      const p0 = p[i - 1] || p[i]
+      const p1 = p[i]
+      const p2 = p[i + 1]
+      const p3 = p[i + 2] || p2
+      d += ` C ${p1[0] + (p2[0] - p0[0]) / 6},${p1[1] + (p2[1] - p0[1]) / 6} ${
+        p2[0] - (p3[0] - p1[0]) / 6
+      },${p2[1] - (p3[1] - p1[1]) / 6} ${p2[0]},${p2[1]}`
+    }
+    return d
+  }
+  const dlPath = $derived(smooth('down'))
+  const ulPath = $derived(smooth('up'))
+  const dlArea = $derived(dlPath ? `${dlPath} L ${xOf(n - 1)},${padT + plotH} L ${padL},${padT + plotH} Z` : '')
+
+  const uid = 'tc' + Math.random().toString(36).slice(2, 7)
+
+  // ── hover ─────────────────────────────────────────────────────────────────
+  function onMove(e: MouseEvent) {
+    if (!svgEl || n < 1) return
+    const r = svgEl.getBoundingClientRect()
+    const x = ((e.clientX - r.left) * w) / r.width
+    const i = Math.round(((x - padL) / plotW) * (n - 1))
+    hover = Math.max(0, Math.min(n - 1, i))
+  }
+  const hp = $derived(hover !== null && points[hover] ? points[hover] : null)
+  // keep the tooltip inside the plot
+  const tipX = $derived(hover === null ? 0 : Math.max(padL, Math.min(w - padR - 132, xOf(hover) + 10)))
 </script>
 
-<div bind:clientWidth={width} class="w-full">
-  {#if points.length < 2}
-    <div class="grid text-sm text-muted-foreground" style="height:{height}px; place-items:center">
-      Collecting data…
-    </div>
+<div bind:clientWidth={w} class="relative" style="color:var(--primary)">
+  {#if n < 2}
+    <div class="grid place-items-center text-dim" style="height:{height}px">// collecting data…</div>
   {:else}
-    <canvas bind:this={canvas} style="width:{width}px;height:{height}px"></canvas>
+    <svg
+      bind:this={svgEl}
+      width="100%"
+      height={height}
+      viewBox="0 0 {w} {height}"
+      preserveAspectRatio="none"
+      role="img"
+      aria-label="traffic history"
+      onmousemove={onMove}
+      onmouseleave={() => (hover = null)}
+    >
+      <defs>
+        <linearGradient id="{uid}-f" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color={dlColor} stop-opacity="0.35" />
+          <stop offset="100%" stop-color={dlColor} stop-opacity="0" />
+        </linearGradient>
+        <filter id="{uid}-g" x="-10%" y="-10%" width="120%" height="120%">
+          <feGaussianBlur stdDeviation="2.4" result="b" />
+          <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+
+      <!-- Y grid + labels -->
+      {#each yTicks as yt (yt.f)}
+        {@const y = padT + plotH - yt.f * plotH}
+        <line x1={padL} y1={y} x2={w - padR} y2={y} stroke="currentColor" stroke-opacity="0.08" />
+        <text x={padL - 8} y={y + 3.5} text-anchor="end" font-size="9.5" fill="var(--muted-foreground)" font-family="var(--font-mono, monospace)">
+          {short(yt.v)}{yt.f === 1 ? '/s' : ''}
+        </text>
+      {/each}
+
+      <!-- X labels -->
+      {#each xTicks as xt, i (i)}
+        <text x={xt.x} y={height - 8} text-anchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'} font-size="9.5" fill="var(--muted-foreground)" font-family="var(--font-mono, monospace)">
+          {xt.label}
+        </text>
+      {/each}
+
+      <!-- series -->
+      {#if dlArea}<path d={dlArea} fill="url(#{uid}-f)" />{/if}
+      {#if ulPath}<path d={ulPath} fill="none" stroke={ulColor} stroke-width="1.6" stroke-opacity="0.85" stroke-linecap="round" />{/if}
+      {#if dlPath}<path d={dlPath} fill="none" stroke={dlColor} stroke-width="1.7" stroke-linecap="round" filter="url(#{uid}-g)" />{/if}
+
+      <!-- hover crosshair + markers -->
+      {#if hp && hover !== null}
+        {@const hx = xOf(hover)}
+        <line x1={hx} y1={padT} x2={hx} y2={padT + plotH} stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="3 3" />
+        <circle cx={hx} cy={yOf(hp.down)} r="3" fill={dlColor} stroke="var(--background)" stroke-width="1.5" />
+        <circle cx={hx} cy={yOf(hp.up)} r="3" fill={ulColor} stroke="var(--background)" stroke-width="1.5" />
+      {/if}
+    </svg>
+
+    {#if hp}
+      <div
+        class="pointer-events-none absolute z-10 rounded-sm border border-line px-2.5 py-1.5 text-[11px] leading-tight"
+        style="left:{tipX}px; top:{padT + 2}px; background:color-mix(in srgb, var(--background) 92%, transparent); backdrop-filter:blur(3px)"
+      >
+        <div class="mb-1 text-dim">{fullTime(hp.t)}</div>
+        <div class="flex items-center gap-1.5"><span style="color:{dlColor}">↓</span> {short(hp.down)}<small class="text-dim">B/s</small></div>
+        <div class="flex items-center gap-1.5"><span style="color:{ulColor}">↑</span> {short(hp.up)}<small class="text-dim">B/s</small></div>
+      </div>
+    {/if}
   {/if}
 </div>

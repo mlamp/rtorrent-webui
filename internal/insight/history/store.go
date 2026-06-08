@@ -168,29 +168,55 @@ func (s *Store) maintain() {
 	}
 }
 
-func pickTier(rangeSecs int64) (string, int) {
+// tierOrder is finest -> coarsest; pickTier returns the coarsest tier whose
+// resolution suits the range, and Query falls back toward finer tiers when a
+// coarse tier has no data yet (e.g. right after start, before any rollup).
+var tierOrder = []string{"raw", "1m", "1h", "1d"}
+
+func pickTier(rangeSecs int64) (int, int) {
 	switch {
 	case rangeSecs <= 15*60:
-		return "raw", 300
+		return 0, 300 // raw
 	case rangeSecs <= 24*3600:
-		return "1m", 300
+		return 1, 300 // 1m
 	case rangeSecs <= 7*86400:
-		return "1h", 320
+		return 2, 320 // 1h
 	default:
-		return "1d", 366
+		return 3, 366 // 1d
 	}
 }
 
 // Query returns a derived rate series (bytes/sec) for the range, decimated to
 // ~target points. hash "" = global. Rates come from cumulative deltas, so gaps
-// are averaged and counter resets are clamped to 0.
+// are averaged and counter resets are clamped to 0. If the resolution-appropriate
+// tier has < 2 points (nothing rolled up yet), it falls back to finer tiers so
+// the chart still shows the data we do have.
 func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) ([]Point, error) {
 	if rangeSecs <= 0 {
 		rangeSecs = 3600
 	}
-	res, target := pickTier(rangeSecs)
+	idx, target := pickTier(rangeSecs)
 	from := s.now() - rangeSecs
 
+	var best []Point
+	for i := idx; i >= 0; i-- {
+		pts, err := s.queryTier(ctx, tierOrder[i], from, hash)
+		if err != nil {
+			return nil, err
+		}
+		if len(pts) >= 2 {
+			best = pts
+			break
+		}
+		if len(pts) > len(best) {
+			best = pts // best-effort if every tier is sparse
+		}
+	}
+	return decimate(best, target), nil
+}
+
+// queryTier derives the rate series for one resolution tier.
+func (s *Store) queryTier(ctx context.Context, res string, from int64, hash string) ([]Point, error) {
 	// Fetch one sample before the window too, so the first in-range point has a
 	// predecessor to derive a rate from.
 	rows, err := s.db.QueryContext(ctx, `
@@ -234,7 +260,7 @@ func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) ([]Poin
 		}
 		pts = append(pts, Point{TS: src[i].ts, Down: dd / dt, Up: du / dt})
 	}
-	return decimate(pts, target), nil
+	return pts, nil
 }
 
 func decimate(pts []Point, target int) []Point {

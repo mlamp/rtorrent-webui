@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import SpeedGraph from '../SpeedGraph.svelte'
+  import TrafficChart from './TrafficChart.svelte'
   import { globals } from '$lib/stores/globals.svelte'
   import { short } from '$lib/format'
 
@@ -8,10 +8,7 @@
   let range = $state('15m')
   let points = $state<Point[]>([])
   let disks = $state<{ path: string; total: number; free: number; used: number }[]>([])
-  const ranges = ['15m', '1h', '6h', '24h']
-
-  const dl = $derived(points.map((p) => p.down))
-  const ul = $derived(points.map((p) => p.up))
+  const ranges = ['15m', '1h', '6h', '24h', '7d']
 
   async function loadHistory() {
     try {
@@ -63,11 +60,7 @@
           {/each}
         </div>
       </div>
-      {#if points.length < 2}
-        <div class="grid h-[200px] place-items-center text-dim">// collecting data…</div>
-      {:else}
-        <SpeedGraph {dl} {ul} h={200} />
-      {/if}
+      <TrafficChart {points} {range} height={220} />
     </div>
 
     <div class="cap-box p-4 pt-5">
