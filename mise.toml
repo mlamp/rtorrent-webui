@@ -35,3 +35,10 @@ run = "go test ./cmd/... ./internal/..."
 [tasks.screenshot]
 dir = "web"
 run = "pnpm exec playwright test e2e/screenshot.spec.ts"
+
+# CalVer release (YYYY.0M.MICRO) — see RELEASING.md. Version derived from git tags.
+[tasks.release]
+run = "bash scripts/release.sh"
+
+[tasks.version]
+run = "git describe --tags --always --dirty"
