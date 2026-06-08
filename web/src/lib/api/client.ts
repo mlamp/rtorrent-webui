@@ -43,6 +43,13 @@ export const api = {
     if (start) fd.append('start', 'true')
     return req('POST', '/api/torrents', { body: fd })
   },
+  getFiles: (h: string) => req('GET', `/api/torrents/${h}/files`),
+  getPeers: (h: string) => req('GET', `/api/torrents/${h}/peers`),
+  getTrackers: (h: string) => req('GET', `/api/torrents/${h}/trackers`),
+  setFilePriority: (h: string, index: number, priority: number) =>
+    req('PUT', `/api/torrents/${h}/files/${index}/priority`, jsonBody({ priority })),
+  setTrackerEnabled: (h: string, index: number, enabled: boolean) =>
+    req('PUT', `/api/torrents/${h}/trackers/${index}/enabled`, jsonBody({ enabled })),
 }
 
 /** Run an action across many hashes, surfacing one toast on success. */

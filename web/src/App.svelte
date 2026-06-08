@@ -17,6 +17,7 @@
   import TorrentTable from './components/table/TorrentTable.svelte'
   import AddTorrentDialog from './components/toolbar/AddTorrentDialog.svelte'
   import ThrottleDialog from './components/toolbar/ThrottleDialog.svelte'
+  import DetailPanel from './components/detail/DetailPanel.svelte'
 
   let addOpen = $state(false)
   let throttleOpen = $state(false)
@@ -197,6 +198,8 @@
       <TorrentTable rows={visible} />
     </main>
   </div>
+
+  <DetailPanel />
 
   <footer class="flex h-7 shrink-0 items-center justify-between border-t bg-card px-4 text-xs text-muted-foreground">
     <span>{globals.torrentCount} torrents · {counts.seeding} seeding · {counts.downloading} downloading</span>

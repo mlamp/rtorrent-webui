@@ -19,6 +19,7 @@ type Server struct {
 	hub  *sse.Hub
 	rpc  *rpc.Client
 	view string
+	geo  GeoLookup
 	mux  *http.ServeMux
 }
 
@@ -40,6 +41,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/torrents", s.handleTorrents)
 	s.mux.HandleFunc("GET /api/stats", s.handleStats)
 	s.actionRoutes()
+	s.detailRoutes()
 	s.mux.Handle("/", web.SPAHandler())
 }
 

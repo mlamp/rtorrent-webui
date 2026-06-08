@@ -3,6 +3,7 @@
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import type { Status } from '$lib/types/torrent'
   import { selection } from '$lib/stores/selection.svelte'
+  import { detail } from '$lib/stores/detail.svelte'
   import { bytes, rate, ratio, percent } from '$lib/format'
 
   let { t, cols }: { t: TorrentRow; cols: string } = $props()
@@ -33,7 +34,7 @@
 
 <div
   data-torrent={t.hash}
-  class="grid items-center border-b border-border/60 transition-colors hover:bg-accent/50 {selection.has(t.hash) ? 'bg-primary/10' : ''}"
+  class="grid items-center border-b border-border/60 transition-colors hover:bg-accent/50 {selection.has(t.hash) ? 'bg-primary/10' : detail.activeHash === t.hash ? 'bg-accent/40' : ''}"
   style="grid-template-columns:{cols}; height:36px"
 >
   <div class="px-3">
@@ -44,7 +45,7 @@
       onchange={(e) => selection.set(t.hash, e.currentTarget.checked)}
     />
   </div>
-  <div class="truncate px-3 font-medium" title={t.name}>{t.name}</div>
+  <button class="truncate px-3 text-left font-medium hover:text-primary" title={t.name} onclick={() => detail.open(t.hash)}>{t.name}</button>
   <div class="px-3 text-right text-sm tabular-nums text-muted-foreground">{bytes(t.size)}</div>
   <div class="px-3">
     <div class="flex items-center gap-2">
