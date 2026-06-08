@@ -30,7 +30,8 @@ func main() {
 	// Flag overrides (applied over the config / defaults when set).
 	addr := flag.String("addr", "", "override server.listen")
 	rtAddr := flag.String("rtorrent", "", "override rtorrent.socket (host:port or /path.sock)")
-	interval := flag.Duration("interval", 0, "override rtorrent.poll_interval")
+	interval := flag.Duration("interval", 0, "override rtorrent.poll_interval (live cadence)")
+	idleInterval := flag.Duration("idle-interval", 0, "override rtorrent.idle_poll_interval (background history cadence when no client is watching)")
 	view := flag.String("view", "", "override rtorrent.view")
 	geoipDB := flag.String("geoip-db", "", "override insight.geoip_db")
 	historyDB := flag.String("history-db", "", "override insight.history_db")
@@ -56,6 +57,9 @@ func main() {
 	}
 	if *interval > 0 {
 		cfg.Rtorrent.PollInterval = config.Duration(*interval)
+	}
+	if *idleInterval > 0 {
+		cfg.Rtorrent.IdleInterval = config.Duration(*idleInterval)
 	}
 	if *view != "" {
 		cfg.Rtorrent.View = *view
@@ -83,8 +87,10 @@ func main() {
 	}
 
 	hub := sse.NewHub()
-	poller := poll.New(src, hub, cfg.Rtorrent.PollInterval.D(), logger)
-	hub.OnActivity(poller.Start, poller.Stop)
+	poller := poll.New(src, hub, cfg.Rtorrent.PollInterval.D(), cfg.Rtorrent.IdleInterval.D(), logger)
+	// Live cadence while a browser is watching; the loop keeps running at the idle
+	// cadence otherwise so history is still recorded with no tab open.
+	hub.OnActivity(func() { poller.SetActive(true) }, func() { poller.SetActive(false) })
 
 	srv := api.New(hub, rpcClient, cfg.Rtorrent.View)
 	srv.SetSearch(search.NewRegistry()) // seam only in v1
@@ -111,6 +117,10 @@ func main() {
 		srv.EnablePassthrough(cfg.Features.RPCAllowlist, cfg.Features.RPCDenylist)
 		logger.Printf("rpc passthrough ENABLED (allow=%d deny=%d)", len(cfg.Features.RPCAllowlist), len(cfg.Features.RPCDenylist))
 	}
+
+	// Launch the perpetual poll loop now that the (optional) history sink is wired;
+	// it runs at the idle cadence until a client connects.
+	poller.Start()
 
 	var handler http.Handler = srv.Handler()
 	if cfg.Auth.Mode == "basic" {

@@ -2,6 +2,13 @@
 // list + globals from a Source, computes a delta vs the previous snapshot, and
 // publishes both to the SSE hub. One loop serves all browsers (rtorrent load is
 // O(1) in browser count).
+//
+// The loop is always running but dual-cadence: while a browser is watching it
+// polls at the live interval (snappy UI + history); when nobody is connected it
+// drops to a slow idle interval purely to keep recording history. Because the
+// history store keeps cumulative counters, the coarse idle samples still yield
+// correct totals — only sub-interval burst shape is lost. The moment a client
+// connects we poll immediately so its first view is fresh, not up-to-idle stale.
 package poll
 
 import (
@@ -15,6 +22,9 @@ import (
 	"github.com/mlamp/rtorrent-webui/internal/sse"
 )
 
+// pollTimeout bounds one multicall round-trip (independent of cadence).
+const pollTimeout = 15 * time.Second
+
 // Source produces the current torrent list + globals for one tick.
 type Source func(ctx context.Context) ([]model.Torrent, model.Globals, error)
 
@@ -22,72 +32,110 @@ type Source func(ctx context.Context) ([]model.Torrent, model.Globals, error)
 type Sink func(torrents []model.Torrent, g model.Globals, ts int64)
 
 type Poller struct {
-	src      Source
-	hub      *sse.Hub
-	interval time.Duration
-	log      *log.Logger
-	sink     Sink
+	src  Source
+	hub  *sse.Hub
+	live time.Duration // cadence while a client is watching
+	idle time.Duration // background cadence for history when nobody is
+	log  *log.Logger
+	sink Sink
 
 	mu      sync.Mutex
-	running bool
-	stop    chan struct{}
+	active  bool // at least one SSE client connected
+	started bool
+	done    chan struct{}
+	wake    chan struct{} // nudges the loop to poll now (on idle->live)
 
 	prev map[string]model.Torrent
 	seq  uint64
 }
 
-func New(src Source, hub *sse.Hub, interval time.Duration, logger *log.Logger) *Poller {
-	if interval <= 0 {
-		interval = time.Second
+func New(src Source, hub *sse.Hub, live, idle time.Duration, logger *log.Logger) *Poller {
+	if live <= 0 {
+		live = time.Second
 	}
-	return &Poller{src: src, hub: hub, interval: interval, log: logger}
+	if idle < live {
+		idle = live // idle is the *slower* cadence; never faster than live
+	}
+	return &Poller{
+		src: src, hub: hub, live: live, idle: idle, log: logger,
+		done: make(chan struct{}),
+		wake: make(chan struct{}, 1),
+	}
 }
 
 // SetSink installs a per-tick data sink (call before Start).
 func (p *Poller) SetSink(s Sink) { p.sink = s }
 
-// Start begins the loop (idempotent). Called when the first SSE client connects.
+// Start launches the perpetual loop (idempotent). Call once at startup; it polls
+// at the idle cadence until a client connects.
 func (p *Poller) Start() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.running {
+	if p.started {
+		p.mu.Unlock()
 		return
 	}
-	p.running = true
-	p.stop = make(chan struct{})
-	p.prev = nil
-	go p.loop(p.stop)
-	p.log.Printf("poller started (interval=%s)", p.interval)
+	p.started = true
+	p.mu.Unlock()
+	go p.run()
+	p.log.Printf("poller running (live=%s, idle/background=%s)", p.live, p.idle)
 }
 
-// Stop halts the loop (idempotent). Called when the last SSE client disconnects.
+// SetActive switches cadence. Wire to the hub: true on the first client, false
+// when the last disconnects. Going live nudges an immediate poll so the joining
+// client sees current state rather than a stale idle sample.
+func (p *Poller) SetActive(active bool) {
+	p.mu.Lock()
+	changed := p.active != active
+	p.active = active
+	p.mu.Unlock()
+	if !changed {
+		return
+	}
+	if active {
+		p.log.Printf("poller: live (%s) — client connected", p.live)
+		select {
+		case p.wake <- struct{}{}:
+		default:
+		}
+	} else {
+		p.log.Printf("poller: idle (%s background, history only) — no clients", p.idle)
+	}
+}
+
+// Stop halts the loop (graceful shutdown / tests).
 func (p *Poller) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.running {
-		return
+	select {
+	case <-p.done:
+	default:
+		close(p.done)
 	}
-	p.running = false
-	close(p.stop)
-	p.log.Printf("poller stopped (no subscribers)")
 }
 
-func (p *Poller) loop(stop chan struct{}) {
-	p.tick()
-	t := time.NewTicker(p.interval)
-	defer t.Stop()
+func (p *Poller) curInterval() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.active {
+		return p.live
+	}
+	return p.idle
+}
+
+func (p *Poller) run() {
 	for {
+		p.tick()
 		select {
-		case <-stop:
+		case <-p.done:
 			return
-		case <-t.C:
-			p.tick()
+		case <-p.wake: // bumped to live — poll now
+		case <-time.After(p.curInterval()):
 		}
 	}
 }
 
 func (p *Poller) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), p.interval+5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pollTimeout)
 	torrents, globals, err := p.src(ctx)
 	cancel()
 	if err != nil {

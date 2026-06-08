@@ -4,10 +4,12 @@
 listen = "0.0.0.0:8080"            # HTTP bind for the web UI + API
 
 [rtorrent]
-socket        = "/var/run/rtorrent/scgi.socket"  # SCGI unix socket (or host:port)
-view          = "main"             # rtorrent view to poll
-poll_interval = "1s"               # list poll cadence -> SSE delta rate
-max_inflight  = 8                  # concurrent SCGI connections cap
+socket            = "/var/run/rtorrent/scgi.socket"  # SCGI unix socket (or host:port)
+view              = "main"         # rtorrent view to poll
+poll_interval     = "1s"           # LIVE cadence while a browser is watching -> SSE delta rate
+idle_poll_interval = "30s"         # background cadence with no client open (history still recorded;
+                                   # cumulative counters keep totals exact, only burst shape is coarser)
+max_inflight      = 8              # concurrent SCGI connections cap
 max_upload_mb = 12                 # reject .torrent uploads larger than this
 
 [auth]

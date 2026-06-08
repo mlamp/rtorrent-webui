@@ -37,7 +37,8 @@ type Server struct {
 type Rtorrent struct {
 	Socket       string   `toml:"socket"`
 	View         string   `toml:"view"`
-	PollInterval Duration `toml:"poll_interval"`
+	PollInterval Duration `toml:"poll_interval"`      // live cadence while a client is watching
+	IdleInterval Duration `toml:"idle_poll_interval"` // background cadence for history when idle
 	MaxInflight  int      `toml:"max_inflight"`
 	MaxUploadMB  int      `toml:"max_upload_mb"`
 }
@@ -76,7 +77,7 @@ type Features struct {
 func Default() Config {
 	return Config{
 		Server:   Server{Listen: ":8080"},
-		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), MaxInflight: 8, MaxUploadMB: 12},
+		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), IdleInterval: Duration(30 * time.Second), MaxInflight: 8, MaxUploadMB: 12},
 		Auth:     Auth{Mode: "none", Realm: "rtorrent-webui"},
 		Insight:  Insight{GeoIPDB: "/usr/share/GeoIP/dbip-country-lite.mmdb"},
 		Features: Features{RPCDenylist: []string{"execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"}},
