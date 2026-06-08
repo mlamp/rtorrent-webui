@@ -4,8 +4,16 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#1e1e2e" />
-    <title>rtorrent-webui</title>
+    <meta name="theme-color" content="#080a0f" />
+    <title>Torui — rtorrent</title>
+    <script>
+      // Default to the dark "Relay" theme (no flash); the toggle still works.
+      try {
+        var k = 'mode-watcher-mode'
+        if (!localStorage.getItem(k)) localStorage.setItem(k, 'dark')
+        if (localStorage.getItem(k) === 'dark') document.documentElement.classList.add('dark')
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>

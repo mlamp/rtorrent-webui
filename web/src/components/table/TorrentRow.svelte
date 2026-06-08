@@ -1,72 +1,83 @@
 <script lang="ts">
-  import { Circle } from '@lucide/svelte'
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import type { Status } from '$lib/types/torrent'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
-  import { bytes, rate, ratio, percent } from '$lib/format'
+  import { short, ratio, eta } from '$lib/format'
 
   let { t, cols }: { t: TorrentRow; cols: string } = $props()
 
-  const STATUS_LABEL: Record<Status, string> = {
-    downloading: 'Downloading',
-    seeding: 'Seeding',
-    stopped: 'Stopped',
-    paused: 'Paused',
-    hashing: 'Checking',
-    error: 'Error',
+  const SEG = 26
+
+  const MARK: Record<Status, string> = {
+    downloading: '▶',
+    seeding: '↑',
+    stopped: '■',
+    paused: '⏸',
+    hashing: '⟳',
+    error: '!',
   }
-  const STATUS_COLOR: Record<Status, string> = {
-    downloading: 'text-status-download',
-    seeding: 'text-status-seed',
-    stopped: 'text-status-stopped',
-    paused: 'text-status-stopped',
-    hashing: 'text-status-check',
-    error: 'text-status-error',
+  const SEGVAR: Record<Status, string> = {
+    downloading: 'var(--status-download)',
+    seeding: 'var(--status-seed)',
+    stopped: 'var(--status-stopped)',
+    paused: 'var(--status-stopped)',
+    hashing: 'var(--status-check)',
+    error: 'var(--status-error)',
   }
-  function barColor(s: Status): string {
-    if (s === 'downloading') return 'var(--status-download)'
-    if (s === 'error') return 'var(--status-error)'
-    if (s === 'hashing') return 'var(--status-check)'
-    return 'var(--status-seed)'
-  }
+
+  const filled = $derived(Math.floor(t.done * SEG))
+  const isDl = $derived(t.status === 'downloading')
+  const open = $derived(detail.activeHash === t.hash)
+  const selected = $derived(selection.has(t.hash))
 </script>
 
 <div
   data-torrent={t.hash}
-  class="grid items-center border-b border-border/60 transition-colors hover:bg-accent/50 {selection.has(t.hash) ? 'bg-primary/10' : detail.activeHash === t.hash ? 'bg-accent/40' : ''}"
-  style="grid-template-columns:{cols}; height:36px"
+  class="trow relative grid cursor-pointer items-center overflow-hidden px-3"
+  class:open
+  class:selected
+  style="grid-template-columns:{cols}; height:44px; --seg-c:{SEGVAR[t.status]}"
+  onclick={() => detail.open(t.hash)}
 >
-  <div class="px-3">
+  {#if t.sweeping}<span class="rowsweep"></span>{/if}
+
+  <div class="pr-1" onclick={(e) => e.stopPropagation()} role="presentation">
     <input
       type="checkbox"
-      class="accent-primary"
-      checked={selection.has(t.hash)}
+      class="align-middle accent-[var(--primary)]"
+      checked={selected}
       onchange={(e) => selection.set(t.hash, e.currentTarget.checked)}
     />
   </div>
-  <button class="truncate px-3 text-left font-medium hover:text-primary" title={t.name} onclick={() => detail.open(t.hash)}>{t.name}</button>
-  <div class="px-3 text-right text-sm tabular-nums text-muted-foreground">{bytes(t.size)}</div>
-  <div class="px-3">
-    <div class="flex items-center gap-2">
-      <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary">
-        <div class="h-full rounded-full" style="width:{t.done * 100}%; background:{barColor(t.status)}"></div>
-      </div>
-      <span class="w-9 text-right text-xs tabular-nums text-muted-foreground">{percent(t.done)}</span>
-    </div>
-  </div>
-  <div class="px-3 text-right text-sm tabular-nums {t.downRate > 0 ? 'text-status-download' : 'text-muted-foreground'}">{rate(t.downRate)}</div>
-  <div class="px-3 text-right text-sm tabular-nums {t.upRate > 0 ? 'text-status-seed' : 'text-muted-foreground'}">{rate(t.upRate)}</div>
-  <div class="px-3 text-right text-sm tabular-nums">{ratio(t.ratio)}</div>
-  <div class="px-3 text-right text-sm tabular-nums text-muted-foreground">{t.seedsConnected} / {t.peersConnected}</div>
-  <div class="truncate px-3 text-sm">
-    <span class="inline-flex items-center gap-1.5 font-medium {STATUS_COLOR[t.status]}">
-      <Circle class="size-2 fill-current" />{STATUS_LABEL[t.status]}
-    </span>
-  </div>
-  <div class="truncate px-3">
+
+  <div class="flex min-w-0 items-center gap-2">
+    <span class="w-3 shrink-0 text-center text-[11px]" style="color:{SEGVAR[t.status]}">{MARK[t.status]}</span>
+    <span class="shrink-0 text-[14px] leading-none transition-transform duration-200 {open ? 'rotate-90 text-primary' : 'text-dim'}">›</span>
+    <span class="truncate text-[12.5px] text-foreground">{t.name}</span>
     {#if t.label}
-      <span class="rounded-full bg-secondary px-2 py-0.5 text-xs text-secondary-foreground">{t.label}</span>
+      <span class="ml-1 shrink-0 rounded-sm border border-line px-1.5 text-[10px] text-acc2">{t.label}</span>
+    {/if}
+    {#if t.message && t.status === 'error'}
+      <span class="ml-1 shrink-0 truncate text-[10px] text-status-error" title={t.message}>{t.message}</span>
     {/if}
   </div>
+
+  <div class="flex items-center gap-2">
+    <div class="seg">
+      {#each Array(SEG) as _, i (i)}
+        <i class="sg {i < filled ? 'on' : ''} {isDl && i === filled && t.done < 1 ? 'lead' : ''}"></i>
+      {/each}
+    </div>
+    <span class="w-8 shrink-0 text-right text-[11px] text-primary">{Math.round(t.done * 100)}%</span>
+  </div>
+
+  <div class="flex flex-col text-[11.5px] leading-[1.25]">
+    <span class="text-status-download">↓{t.downRate > 0 ? short(t.downRate) : '·'}</span>
+    <span class="text-status-seed">↑{t.upRate > 0 ? short(t.upRate) : '·'}</span>
+  </div>
+
+  <div class="text-right text-[12px] text-dim2">{short(t.size)}<span class="text-dim">B</span></div>
+  <div class="text-right text-[12px] text-acc2">{ratio(t.ratio)}</div>
+  <div class="text-right text-[12px] text-dim">{isDl ? eta(t.etaSeconds) : '·'}</div>
 </div>

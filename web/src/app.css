@@ -4,75 +4,89 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Theme: Catppuccin — Latte (light) / Mocha (dark) — mapped onto the
- * shadcn-svelte token set so every component + utility reads cohesively.
- * Accent = Mauve. Tuned for dense, highly readable data tables.
+ * Theme: "Relay" — a terminal-inspired dark UI (blue #4aa3ff / teal #39e0c8 on
+ * near-black) with a clean light adaptation. JetBrains Mono throughout.
  */
+
+/* ---- light (adaptation) ---- */
 :root {
-  --radius: 0.5rem;
+  --radius: 3px;
+  --background: #eef2f8;
+  --foreground: #16233a;
+  --card: #f8fafd;
+  --card-foreground: #16233a;
+  --popover: #f8fafd;
+  --popover-foreground: #16233a;
+  --primary: #1f7ae0;
+  --primary-foreground: #ffffff;
+  --secondary: #e3ebf7;
+  --secondary-foreground: #16233a;
+  --muted: #e7edf6;
+  --muted-foreground: #5a6b85;
+  --accent: #e1ebfa;
+  --accent-foreground: #16233a;
+  --destructive: #e5484d;
+  --destructive-foreground: #ffffff;
+  --border: #d3deef;
+  --input: #c4d3ea;
+  --ring: #1f7ae0;
 
-  --background: #e6e9ef; /* latte mantle */
-  --foreground: #4c4f69; /* latte text */
-  --card: #eff1f5; /* latte base */
-  --card-foreground: #4c4f69;
-  --popover: #eff1f5;
-  --popover-foreground: #4c4f69;
-  --primary: #8839ef; /* latte mauve */
-  --primary-foreground: #eff1f5;
-  --secondary: #ccd0da; /* latte surface0 */
-  --secondary-foreground: #4c4f69;
-  --muted: #dce0e8; /* latte crust */
-  --muted-foreground: #6c6f85; /* latte subtext0 */
-  --accent: #ccd0da;
-  --accent-foreground: #4c4f69;
-  --destructive: #d20f39; /* latte red */
-  --destructive-foreground: #eff1f5;
-  --border: #ccd0da; /* latte surface0 */
-  --input: #bcc0cc; /* latte surface1 */
-  --ring: #8839ef;
+  --acc: #1f7ae0;
+  --acc2: #0d9488;
+  --dim: #7587a3;
+  --dim2: #5a6b85;
+  --warn: #c98a00;
+  --line: #d3deef;
 
-  /* torrent status accents */
-  --status-download: #1e66f5; /* blue */
-  --status-seed: #40a02b; /* green */
-  --status-stopped: #9ca0b0; /* overlay0 */
-  --status-error: #d20f39; /* red */
-  --status-check: #df8e1d; /* yellow */
+  --status-download: #1f7ae0;
+  --status-seed: #0d9488;
+  --status-stopped: #8a98b0;
+  --status-error: #e5484d;
+  --status-check: #c98a00;
+
+  --glow: 0 0 0 transparent; /* glow off in light */
 }
 
+/* ---- dark (the real Relay) ---- */
 .dark {
-  --background: #181825; /* mocha mantle */
-  --foreground: #cdd6f4; /* mocha text */
-  --card: #1e1e2e; /* mocha base */
-  --card-foreground: #cdd6f4;
-  --popover: #1e1e2e;
-  --popover-foreground: #cdd6f4;
-  --primary: #cba6f7; /* mocha mauve */
-  --primary-foreground: #11111b;
-  --secondary: #313244; /* mocha surface0 */
-  --secondary-foreground: #cdd6f4;
-  --muted: #11111b; /* mocha crust */
-  --muted-foreground: #a6adc8; /* mocha subtext0 */
-  --accent: #313244;
-  --accent-foreground: #cdd6f4;
-  --destructive: #f38ba8; /* mocha red */
-  --destructive-foreground: #11111b;
-  --border: #313244; /* mocha surface0 */
-  --input: #45475a; /* mocha surface1 */
-  --ring: #cba6f7;
+  --background: #080a0f;
+  --foreground: #cfe3ff;
+  --card: #0b0e15;
+  --card-foreground: #cfe3ff;
+  --popover: #0b0e15;
+  --popover-foreground: #cfe3ff;
+  --primary: #4aa3ff;
+  --primary-foreground: #04121f;
+  --secondary: #141d2e;
+  --secondary-foreground: #cfe3ff;
+  --muted: #0b0e15;
+  --muted-foreground: #7e8fab;
+  --accent: #11203a;
+  --accent-foreground: #e7f1ff;
+  --destructive: #ff7676;
+  --destructive-foreground: #1a0606;
+  --border: rgba(74, 163, 255, 0.16);
+  --input: rgba(74, 163, 255, 0.24);
+  --ring: #4aa3ff;
 
-  --status-download: #89b4fa;
-  --status-seed: #a6e3a1;
-  --status-stopped: #6c7086;
-  --status-error: #f38ba8;
-  --status-check: #f9e2af;
+  --acc: #4aa3ff;
+  --acc2: #39e0c8;
+  --dim: #5a6b85;
+  --dim2: #7e8fab;
+  --warn: #fbbf24;
+  --line: rgba(74, 163, 255, 0.16);
+
+  --status-download: #4aa3ff;
+  --status-seed: #39e0c8;
+  --status-stopped: #5a6b85;
+  --status-error: #ff7676;
+  --status-check: #fbbf24;
 }
 
-/* Expose the tokens as Tailwind v4 theme colors → bg-background, text-muted-foreground, etc. */
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -94,14 +108,21 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  --color-acc: var(--acc);
+  --color-acc2: var(--acc2);
+  --color-dim: var(--dim);
+  --color-dim2: var(--dim2);
+  --color-warn: var(--warn);
+  --color-line: var(--line);
+
   --color-status-download: var(--status-download);
   --color-status-seed: var(--status-seed);
   --color-status-stopped: var(--status-stopped);
   --color-status-error: var(--status-error);
   --color-status-check: var(--status-check);
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: ui-monospace, 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+  --font-sans: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
 html,
@@ -114,13 +135,442 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
 }
 
-/* thin, themed scrollbars for the dense table */
+/* Relay atmosphere — radial glow + scanlines, dark mode only. */
+.dark body {
+  background-image: radial-gradient(900px 520px at 72% -5%, rgba(74, 163, 255, 0.08), transparent 60%);
+  background-attachment: fixed;
+}
+.dark #app::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(74, 163, 255, 0.03) 0 1px, transparent 1px 3px);
+  mix-blend-mode: overlay;
+  z-index: 9999;
+}
+
+/* thin themed scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--input) transparent;
+  scrollbar-color: color-mix(in srgb, var(--primary) 28%, transparent) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--primary) 24%, transparent);
+  border-radius: 2px;
+  border: 2px solid var(--background);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============ Relay helper classes ============ */
+
+/* floating-caption box (fieldset-legend look) */
+.cap-box {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.cap-box > .cap {
+  position: absolute;
+  top: -8px;
+  left: 10px;
+  background: var(--background);
+  padding: 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+
+/* glow text */
+.glow-acc {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--primary) 60%, transparent);
+}
+.glow-acc2 {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--acc2) 60%, transparent);
+}
+
+/* ---- segmented "waveform" progress ---- */
+.seg {
+  display: flex;
+  gap: 1.5px;
+  height: 13px;
+  flex: 1;
+  min-width: 0;
+}
+.seg .sg {
+  flex: 1;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--primary) 11%, transparent);
+}
+.seg .sg.on {
+  background: var(--seg-c, var(--primary));
+  box-shadow: 0 0 5px var(--seg-c, var(--primary));
+}
+.seg .sg.lead {
+  background: var(--seg-c, var(--primary));
+  animation: breathe 1.15s ease-in-out infinite;
+}
+.seg .sg.flash {
+  animation: flash 0.6s ease-out;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.35;
+    box-shadow: none;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 7px var(--seg-c, var(--primary));
+  }
+}
+@keyframes flash {
+  0% {
+    filter: brightness(2.6);
+    box-shadow: 0 0 11px var(--seg-c, var(--primary));
+  }
+  100% {
+    filter: none;
+  }
+}
+
+/* ---- row completion sweep ---- */
+.rowsweep {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 35%,
+    color-mix(in srgb, var(--acc2) 30%, transparent) 50%,
+    transparent 65%
+  );
+  animation: sweep 1.4s ease-out forwards;
+  z-index: 1;
+}
+@keyframes sweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(110%);
+  }
+}
+
+/* ---- blinking terminal caret ---- */
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+.caret-blink {
+  animation: blink 1.05s steps(1) infinite;
+}
+
+/* subtle row enter */
+@keyframes rowin {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- torrent rows ---- */
+.trow {
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 6%, transparent);
+}
+.trow:hover {
+  background: color-mix(in srgb, var(--primary) 4.5%, transparent);
+}
+.trow.open {
+  background: color-mix(in srgb, var(--primary) 7.5%, transparent);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.trow.selected {
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+
+/* brand */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--primary);
+}
+.dark .brand {
+  text-shadow: 0 0 14px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+/* top buttons */
+.tbtn {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--dim2);
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 12px;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.tbtn:hover {
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+  color: var(--foreground);
+}
+.tbtn.solid {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 25%, transparent);
+}
+.tbtn.acc {
+  background: color-mix(in srgb, var(--acc2) 10%, transparent);
+  color: var(--acc2);
+  border-color: color-mix(in srgb, var(--acc2) 28%, transparent);
+}
+.tbtn.danger:hover {
+  border-color: color-mix(in srgb, var(--destructive) 50%, transparent);
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 8%, transparent);
+}
+
+/* filter rows */
+.frow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 7px;
+  font-size: 12.5px;
+  color: var(--dim2);
+  border-radius: 2px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.frow:hover {
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+.frow.on {
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.frow .mk {
+  width: 14px;
+  text-align: center;
+  color: var(--dim);
+}
+.frow.on .mk {
+  color: var(--primary);
+}
+.frow .ct {
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+/* rate boxes */
+.rate-box {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--primary);
+}
+.rate-box.up {
+  color: var(--acc2);
+  background: color-mix(in srgb, var(--acc2) 5%, transparent);
+  border-color: color-mix(in srgb, var(--acc2) 12%, transparent);
+}
+.rate-box small {
+  font-size: 10px;
+  font-weight: 400;
+  opacity: 0.6;
+}
+
+/* ---- detail panel ---- */
+.rd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.rd-key {
+  color: var(--dim);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+.rd-btn {
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+  color: var(--dim2);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 6px 11px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+.rd-btn:hover {
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+  color: var(--foreground);
+}
+.rd-btn.danger:hover {
+  border-color: color-mix(in srgb, var(--destructive) 50%, transparent);
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 8%, transparent);
+}
+.rd-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.rd-stat {
+  flex: 1;
+  min-width: 88px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 8px 11px;
+  background: color-mix(in srgb, var(--primary) 3%, transparent);
+}
+.rd-stat-l {
+  font-size: 9.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 3px;
+}
+.rd-stat-v {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rd-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.rd-tab {
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.1em;
+  padding: 8px 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.rd-tab:hover {
+  color: var(--dim2);
+}
+.rd-tab.on {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+.rd-row {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 2px;
+  font-size: 12px;
+}
+.rd-row:hover {
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+}
+.rd-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  overflow: hidden;
+}
+.rd-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  box-shadow: 0 0 6px var(--primary);
+}
+.rd-prio {
+  font-size: 10px;
+  color: var(--dim);
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+.rd-prio.on {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+.rd-prio.skip {
+  color: var(--destructive);
+  border-color: color-mix(in srgb, var(--destructive) 30%, transparent);
+}
+.rd-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.rd-dot.ok {
+  background: var(--acc2);
+  box-shadow: 0 0 7px var(--acc2);
+}
+.rd-dot.idle {
+  background: var(--dim);
+}
+.rd-cc {
+  font-size: 10px;
+  color: var(--dim2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  text-align: center;
+  padding: 1px 0;
+}
+
+/* terminal search bar */
+.searchbar {
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+.searchbar.active {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--primary) 20%, transparent),
+    0 0 18px color-mix(in srgb, var(--primary) 12%, transparent);
 }

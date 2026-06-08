@@ -13,6 +13,15 @@ export function rate(n: number): string {
   return n > 0 ? `${bytes(n)}/s` : '0 B/s'
 }
 
+/** Compact magnitude, e.g. 4128768 -> "3.9M" (used in dense terminal cells). */
+export function short(n: number): string {
+  if (!n || n <= 0) return '0'
+  const u = ['', 'K', 'M', 'G', 'T', 'P']
+  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
+  const v = n / Math.pow(1024, i)
+  return `${i === 0 ? v : v.toFixed(1)}${u[i]}`
+}
+
 /** rtorrent stores ratio ×1000. */
 export function ratio(permille: number): string {
   return (permille / 1000).toFixed(2)

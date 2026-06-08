@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test'
 test('add magnet via dialog and select rows', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
-  await expect(page.locator('header')).toContainText('rtorrent-webui')
+  await expect(page.locator('header')).toContainText('grep')
   await expect(page.locator('footer')).toContainText('torrents')
 
   const before = parseInt((await page.locator('footer').innerText()).match(/(\d+) torrents/)?.[1] || '0', 10)
@@ -22,6 +22,6 @@ test('add magnet via dialog and select rows', async ({ page }) => {
 
   // Select all visible rows -> the action bar appears.
   await page.locator('input[type=checkbox]').first().check()
-  await expect(page.locator('header')).toContainText('selected')
+  await expect(page.locator('header')).toContainText('sel')
   await page.screenshot({ path: 'e2e/screenshots/selection.png' })
 })

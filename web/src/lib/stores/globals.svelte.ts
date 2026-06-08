@@ -13,6 +13,10 @@ class GlobalsState {
   activeCount = $state(0)
   connection = $state<Connection>('connecting')
 
+  // rolling history for the sidebar sparkline (~last 60 samples)
+  dlHist = $state<number[]>(Array(60).fill(0))
+  ulHist = $state<number[]>(Array(60).fill(0))
+
   apply(g: GlobalsWire) {
     this.downRate = g.downRate
     this.upRate = g.upRate
@@ -22,6 +26,8 @@ class GlobalsState {
     this.upLimit = g.upLimit
     this.torrentCount = g.torrentCount
     this.activeCount = g.activeCount
+    this.dlHist = [...this.dlHist.slice(1), g.downRate]
+    this.ulHist = [...this.ulHist.slice(1), g.upRate]
   }
 }
 

@@ -22,6 +22,7 @@
     "vite": "^8.0.12"
   },
   "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@lucide/svelte": "^1.17.0",
     "bits-ui": "^2.18.1",
     "clsx": "^2.1.1",

@@ -16,7 +16,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: '../bin/rtorrent-webui -addr :8099',
+    command: '../bin/rtorrent-webui -addr :8099 -rtorrent 127.0.0.1:5000',
     url: 'http://localhost:8099/healthz',
     reuseExistingServer: true,
     timeout: 30_000,

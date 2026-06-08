@@ -23,9 +23,9 @@
     }}
     role="presentation"
   >
-    <div class="w-full max-w-md rounded-lg border bg-card text-card-foreground shadow-2xl">
-      <div class="flex items-center justify-between border-b px-4 py-3">
-        <h2 class="font-semibold">{title}</h2>
+    <div class="w-full max-w-md rounded-sm border border-line bg-card text-card-foreground shadow-2xl">
+      <div class="flex items-center justify-between border-b border-line px-4 py-3">
+        <h2 class="text-[13px] font-semibold uppercase tracking-[0.08em] text-primary">{title}</h2>
         <button
           onclick={() => (open = false)}
           class="grid size-7 place-items-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground"

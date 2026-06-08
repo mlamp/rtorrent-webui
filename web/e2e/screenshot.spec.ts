@@ -5,9 +5,9 @@ const shot = (name: string) => `e2e/screenshots/${name}.png`
 test('themed shell renders in light, dark, and mobile', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/') // SSE keeps the connection open, so don't wait for networkidle
-  await expect(page.locator('header')).toContainText('rtorrent-webui')
-  // wait for the live snapshot to populate the table
-  await expect(page.locator('text=/torrents/').first()).toBeVisible()
+  await expect(page.locator('header')).toContainText('grep')
+  // wait for the live snapshot to populate the footer
+  await expect(page.locator('footer')).toContainText('torrents')
   await page.waitForTimeout(800)
   await page.screenshot({ path: shot('desktop-light') })
 

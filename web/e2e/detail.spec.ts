@@ -5,19 +5,19 @@ test('detail panel tabs render', async ({ page }) => {
   await page.goto('/')
   await expect(page.locator('footer')).toContainText('torrents')
 
-  // filter to a file-bearing torrent, then open it
-  await page.getByPlaceholder('Filter torrents…').fill('ubuntu')
+  // filter to a file-bearing torrent, then open it (whole row is clickable)
+  await page.locator('.searchbar input').fill('ubuntu')
   await page.waitForTimeout(300)
-  await page.locator('[data-torrent] button').first().click()
+  await page.locator('[data-torrent]').first().click()
 
-  await expect(page.getByRole('button', { name: 'General' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'PIECES' })).toBeVisible()
   await page.screenshot({ path: 'e2e/screenshots/detail-general.png' })
 
-  await page.getByRole('button', { name: 'Files' }).click()
+  await page.getByRole('button', { name: 'FILES' }).click()
   await page.waitForTimeout(800)
   await page.screenshot({ path: 'e2e/screenshots/detail-files.png' })
 
-  await page.getByRole('button', { name: 'Speed' }).click()
-  await page.waitForTimeout(1500)
-  await page.screenshot({ path: 'e2e/screenshots/detail-speed.png' })
+  await page.getByRole('button', { name: 'PEERS' }).click()
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: 'e2e/screenshots/detail-peers.png' })
 })

@@ -26,6 +26,9 @@ export class TorrentRow {
   added = $state(0)
   message = $state('')
 
+  // transient: true for ~1.4s after a download completes (drives the row sweep)
+  sweeping = $state(false)
+
   done = $derived(this.size > 0 ? this.completed / this.size : 0)
   etaSeconds = $derived.by(() => {
     const left = this.size - this.completed
@@ -36,7 +39,15 @@ export class TorrentRow {
     this.hash = hash
   }
 
+  private sweepTimer: ReturnType<typeof setTimeout> | undefined
+  private triggerSweep() {
+    this.sweeping = true
+    clearTimeout(this.sweepTimer)
+    this.sweepTimer = setTimeout(() => (this.sweeping = false), 1400)
+  }
+
   apply(p: Partial<TorrentWire>) {
+    const prevStatus = this.status
     if (p.name !== undefined) this.name = p.name
     if (p.size !== undefined) this.size = p.size
     if (p.completed !== undefined) this.completed = p.completed
@@ -54,6 +65,11 @@ export class TorrentRow {
     if (p.tracker !== undefined) this.tracker = p.tracker
     if (p.added !== undefined) this.added = p.added
     if (p.message !== undefined) this.message = p.message
+
+    // a torrent that just finished (downloading -> seeding) gets a sweep flourish
+    if (p.status !== undefined && prevStatus === 'downloading' && p.status === 'seeding') {
+      this.triggerSweep()
+    }
   }
 }
 
