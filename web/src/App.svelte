@@ -132,19 +132,19 @@
   {#if mainView === 'torrents'}
     <div class="flex min-h-0 flex-1">
       <!-- ───────── sidebar ───────── -->
-      <aside class="hidden w-[280px] shrink-0 flex-col gap-5 overflow-y-auto border-r border-line p-4 md:flex">
-        <div class="brand">▚ TORUI<span class="ml-1 text-[13px] font-normal tracking-[0.04em] text-dim">::rtorrent</span></div>
+      <aside class="hidden w-[300px] shrink-0 flex-col gap-5 overflow-y-auto border-r border-line p-4 md:flex">
+        <div class="brand">▚ TORUI<span class="ml-0.5 text-[13px] font-normal tracking-[0.04em] text-dim">::rtorrent</span></div>
 
         <div class="cap-box px-3 pb-3 pt-3.5">
           <div class="cap">transfer</div>
           <div class="flex gap-2.5">
             <div class="rate-box flex-1">
               <span class="text-[15px] leading-none">↓</span>
-              <span class="glow-acc text-[18px] font-semibold">{short(globals.downRate)}<small>B/s</small></span>
+              <span class="glow-acc text-[16px] font-semibold">{short(globals.downRate)}<small>B/s</small></span>
             </div>
             <div class="rate-box up flex-1">
               <span class="text-[15px] leading-none">↑</span>
-              <span class="glow-acc2 text-[18px] font-semibold">{short(globals.upRate)}<small>B/s</small></span>
+              <span class="glow-acc2 text-[16px] font-semibold">{short(globals.upRate)}<small>B/s</small></span>
             </div>
           </div>
           <div class="mt-3"><SpeedGraph dl={globals.dlHist} ul={globals.ulHist} /></div>

@@ -39,7 +39,7 @@
 </script>
 
 {#if t}
-  <section class="flex h-80 shrink-0 flex-col border-t border-line bg-card/40">
+  <section class="flex h-96 shrink-0 flex-col border-t border-line bg-card/40">
     <!-- head -->
     <div class="flex shrink-0 items-center justify-between gap-4 px-5 pt-4">
       <div class="flex items-center gap-2 text-[12px] text-dim2">

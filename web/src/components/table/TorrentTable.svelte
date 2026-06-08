@@ -9,7 +9,7 @@
 
   // shared grid template: select · name · progress · rate · size · ratio · eta
   const COLS = '24px minmax(0,1fr) 200px 92px 64px 52px 60px'
-  const ROW_H = 44
+  const ROW_H = 40
   const OVERSCAN = 8
 
   let scrollTop = $state(0)

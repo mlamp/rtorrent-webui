@@ -34,15 +34,19 @@
 
 <div
   data-torrent={t.hash}
-  class="trow relative grid cursor-pointer items-center overflow-hidden px-3"
+  class="trow group relative grid cursor-pointer items-center overflow-hidden px-3"
   class:open
   class:selected
-  style="grid-template-columns:{cols}; height:44px; --seg-c:{SEGVAR[t.status]}"
+  style="grid-template-columns:{cols}; height:40px; --seg-c:{SEGVAR[t.status]}"
   onclick={() => detail.open(t.hash)}
 >
   {#if t.sweeping}<span class="rowsweep"></span>{/if}
 
-  <div class="pr-1" onclick={(e) => e.stopPropagation()} role="presentation">
+  <div
+    class="pr-1 transition-opacity group-hover:opacity-100 {selected ? 'opacity-100' : 'opacity-0'}"
+    onclick={(e) => e.stopPropagation()}
+    role="presentation"
+  >
     <input
       type="checkbox"
       class="align-middle accent-[var(--primary)]"
@@ -73,11 +77,11 @@
   </div>
 
   <div class="flex flex-col text-[11.5px] leading-[1.25]">
-    <span class="text-status-download">↓{t.downRate > 0 ? short(t.downRate) : '·'}</span>
-    <span class="text-status-seed">↑{t.upRate > 0 ? short(t.upRate) : '·'}</span>
+    <span class="text-status-download {t.downRate > 0 ? 'txt-glow' : ''}">↓{t.downRate > 0 ? short(t.downRate) : '·'}</span>
+    <span class="text-status-seed {t.upRate > 0 ? 'txt-glow' : ''}">↑{t.upRate > 0 ? short(t.upRate) : '·'}</span>
   </div>
 
   <div class="text-right text-[12px] text-dim2">{short(t.size)}<span class="text-dim">B</span></div>
-  <div class="text-right text-[12px] text-acc2">{ratio(t.ratio)}</div>
+  <div class="text-right text-[12px] text-acc2 txt-glow">{ratio(t.ratio)}</div>
   <div class="text-right text-[12px] text-dim">{isDl ? eta(t.etaSeconds) : '·'}</div>
 </div>

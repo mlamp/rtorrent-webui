@@ -32,6 +32,12 @@ func MockSource(n int) Source {
 		}
 	}
 	tick := 0
+	var dlTotal, ulTotal int64
+	// seed plausible historical totals so the Σ line looks lived-in
+	for i := range tor {
+		ulTotal += tor[i].Size / 4
+		dlTotal += tor[i].Size
+	}
 	return func(_ context.Context) ([]model.Torrent, model.Globals, error) {
 		tick++
 		var g model.Globals
@@ -65,6 +71,10 @@ func MockSource(n int) Source {
 			g.DownRate += t.DownRate
 			g.UpRate += t.UpRate
 		}
+		dlTotal += g.DownRate
+		ulTotal += g.UpRate
+		g.DownTotal = dlTotal
+		g.UpTotal = ulTotal
 		out := make([]model.Torrent, len(tor))
 		copy(out, tor)
 		return out, g, nil

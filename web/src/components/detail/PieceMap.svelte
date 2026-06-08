@@ -23,8 +23,8 @@
 <div class="flex flex-wrap gap-[2px]">
   {#each cells as c, i (i)}
     <i
-      class="size-[9px] rounded-[1px]"
-      style="background:{c === 1 ? 'var(--primary)' : c === 2 ? 'var(--warn)' : 'color-mix(in srgb, var(--primary) 12%, transparent)'}"
+      class="size-[10px] rounded-[1px]"
+      style="background:{c === 1 ? 'var(--primary)' : c === 2 ? 'var(--warn)' : 'color-mix(in srgb, var(--primary) 15%, transparent)'}; {c === 1 ? 'box-shadow:0 0 3px color-mix(in srgb,var(--primary) 50%,transparent)' : ''}"
     ></i>
   {/each}
 </div>

@@ -205,23 +205,27 @@ body {
 /* ---- segmented "waveform" progress ---- */
 .seg {
   display: flex;
-  gap: 1.5px;
-  height: 13px;
+  gap: 2px;
+  height: 17px;
   flex: 1;
   min-width: 0;
+  align-items: stretch;
 }
 .seg .sg {
   flex: 1;
   border-radius: 1px;
-  background: color-mix(in srgb, var(--primary) 11%, transparent);
+  /* always-visible track so the full bar reads even at low progress */
+  background: color-mix(in srgb, var(--primary) 17%, transparent);
 }
 .seg .sg.on {
   background: var(--seg-c, var(--primary));
-  box-shadow: 0 0 5px var(--seg-c, var(--primary));
+  box-shadow: 0 0 6px var(--seg-c, var(--primary));
 }
 .seg .sg.lead {
-  background: var(--seg-c, var(--primary));
-  animation: breathe 1.15s ease-in-out infinite;
+  /* bright near-white leading edge that breathes */
+  background: color-mix(in srgb, var(--seg-c, var(--primary)) 35%, white);
+  box-shadow: 0 0 9px var(--seg-c, var(--primary));
+  animation: breathe 1.6s ease-in-out infinite;
 }
 .seg .sg.flash {
   animation: flash 0.6s ease-out;
@@ -229,13 +233,18 @@ body {
 @keyframes breathe {
   0%,
   100% {
-    opacity: 0.35;
-    box-shadow: none;
+    opacity: 0.55;
+    box-shadow: 0 0 4px var(--seg-c, var(--primary));
   }
   50% {
     opacity: 1;
-    box-shadow: 0 0 7px var(--seg-c, var(--primary));
+    box-shadow: 0 0 12px var(--seg-c, var(--primary));
   }
+}
+
+/* faint CRT text-glow for high-emphasis values */
+.txt-glow {
+  text-shadow: 0 0 5px color-mix(in srgb, currentColor 55%, transparent);
 }
 @keyframes flash {
   0% {
