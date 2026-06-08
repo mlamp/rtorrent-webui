@@ -1,0 +1,29 @@
+# rtorrent-webui as a sidecar to a (patched) rtorrent, sharing the SCGI socket.
+services:
+  rtorrent:
+    # The EPIPE-fixed rtorrent image (or any rtorrent exposing a unix SCGI socket).
+    image: ghcr.io/mlamp/rtorrent-rutorrent:0.16.10-scgifix
+    restart: unless-stopped
+    volumes:
+      - rtorrent-socket:/var/run/rtorrent   # rtorrent must: network.scgi.open_local = /var/run/rtorrent/scgi.socket
+      - ./downloads:/downloads
+    # ... your existing rtorrent ports/config ...
+
+  webui:
+    image: ghcr.io/mlamp/rtorrent-webui:latest
+    restart: unless-stopped
+    depends_on: [rtorrent]
+    ports:
+      - "8080:8080"
+    volumes:
+      - rtorrent-socket:/var/run/rtorrent      # shared SCGI socket (read-write)
+      - ./downloads:/downloads:ro              # for /api/diskspace (read-only is fine)
+      - webui-data:/data                       # SQLite history persistence
+      - ./geoip:/data/geoip:ro                 # optional: MaxMind/DB-IP mmdb for peer flags
+      - ./config.toml:/etc/rtorrent-webui/config.toml:ro  # optional: override the baked config
+    # The socket and download dirs must be readable/writable by the container's
+    # nonroot user — run rtorrent with a matching uid/gid or socket perms 0o666.
+
+volumes:
+  rtorrent-socket:
+  webui-data:

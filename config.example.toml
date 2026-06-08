@@ -1,0 +1,35 @@
+# rtorrent-webui configuration
+
+[server]
+listen = "0.0.0.0:8080"            # HTTP bind for the web UI + API
+
+[rtorrent]
+socket        = "/var/run/rtorrent/scgi.socket"  # SCGI unix socket (or host:port)
+view          = "main"             # rtorrent view to poll
+poll_interval = "1s"               # list poll cadence -> SSE delta rate
+max_inflight  = 8                  # concurrent SCGI connections cap
+max_upload_mb = 12                 # reject .torrent uploads larger than this
+
+[auth]
+mode  = "none"                     # "none" (trust a fronting reverse proxy) | "basic"
+realm = "rtorrent-webui"
+# htpasswd_file = "/config/htpasswd"   # apache htpasswd (bcrypt) — takes precedence
+# [[auth.users]]                    # inline users (bcrypt; generate with `genhash <pw>`)
+#   name = "admin"
+#   password_hash = "$2y$12$REPLACE_ME"
+
+[downloads]
+dirs        = ["/downloads"]       # statfs targets for /api/diskspace
+default_dir = "/downloads"
+
+[insight]
+geoip_db          = ""             # MaxMind GeoLite2-Country or DB-IP Lite mmdb; empty disables flags
+history_db        = "/data/history.db"  # SQLite time series; empty disables history
+history_retention = "24h"
+search_enabled    = false          # tracker-search seam (no adapters in v1)
+
+[features]
+rpc_passthrough = false            # enable POST /api/rpc
+rpc_allowlist   = []               # if non-empty, only these methods are callable
+rpc_denylist    = ["execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"]
+delete_with_data = false           # allow DELETE to also remove files (wired later)

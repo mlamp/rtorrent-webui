@@ -25,7 +25,12 @@ type Server struct {
 	dirs    []string
 	history *history.Store
 	search  *search.Registry
-	mux     *http.ServeMux
+
+	rpcPassthrough bool
+	rpcAllow       map[string]bool
+	rpcDeny        map[string]bool
+
+	mux *http.ServeMux
 }
 
 func New(hub *sse.Hub, r *rpc.Client, view string) *Server {
@@ -48,6 +53,7 @@ func (s *Server) routes() {
 	s.actionRoutes()
 	s.detailRoutes()
 	s.insightRoutes()
+	s.mux.HandleFunc("POST /api/rpc", s.handleRPCPassthrough)
 	s.mux.Handle("/", web.SPAHandler())
 }
 
