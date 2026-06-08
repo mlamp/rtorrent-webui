@@ -5,9 +5,7 @@
   import { detail } from '$lib/stores/detail.svelte'
   import { view } from '$lib/stores/view.svelte'
   import { short, ratio } from '$lib/format'
-  import { frameSeries } from '$lib/series'
   import { rollingHistory } from '$lib/history.svelte'
-  import PieceMap from '../detail/PieceMap.svelte'
   import SpeedGraph from '../SpeedGraph.svelte'
 
   let { t }: { t: TorrentRow } = $props()
@@ -35,15 +33,9 @@
   const selected = $derived(selection.has(t.hash))
   const cursor = $derived(view.cursor === t.hash)
 
-  const pieceCount = $derived(Math.min(84, Math.max(36, Math.round(t.size / (1 << 20)))))
-  const cols = $derived(Math.max(14, Math.ceil(pieceCount / 3)))
-
-  // seed the sparkline from the real current rate so idle cards read flat
-  const hist = rollingHistory(
-    () => ({ down: t.downRate, up: t.upRate }),
-    44,
-    () => frameSeries(t.hash, '15m', t.downRate, t.upRate),
-  )
+  // Live mini-sparkline. Starts flat-at-zero (no fabricated history) and fills with
+  // real samples as poll ticks arrive — matching the global header graph.
+  const hist = rollingHistory(() => ({ down: t.downRate, up: t.upRate }), 44)
 
   function onclick(e: MouseEvent) {
     if (e.metaKey || e.ctrlKey || e.shiftKey) selection.toggle(t.hash)
@@ -80,10 +72,6 @@
     </span>
     <span class="gc-mk" style="color:{SEGVAR[t.status]}">{MARK[t.status]}</span>
     <span class="gc-name">{t.name}</span>
-  </div>
-
-  <div class="gc-piece">
-    <PieceMap done={t.done} count={pieceCount} downloading={isDl} cell={5} gap={2} {cols} radius={1} />
   </div>
 
   <div class="gc-prog">

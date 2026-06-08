@@ -1,14 +1,14 @@
 <script lang="ts">
   import { detail, type DetailTab } from '$lib/stores/detail.svelte'
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
-  import type { PeerInfo } from '$lib/types/detail'
-  import { api } from '$lib/api/client'
+  import { api, silentGet } from '$lib/api/client'
   import { short, ratio } from '$lib/format'
-  import { FRAMES, frameSeries, type Frame } from '$lib/series'
-  import { rollingHistory } from '$lib/history.svelte'
+  import { onMount } from 'svelte'
   import PieceMap from './PieceMap.svelte'
   import CountryFlag from './CountryFlag.svelte'
-  import SpeedGraph from '../SpeedGraph.svelte'
+  import TrafficChart from '../charts/TrafficChart.svelte'
+  import { decodePieces } from '$lib/pieces'
+  import { peerFlags } from '$lib/peers'
 
   // Fixed height so the list's virtualization math stays exact (must match
   // TorrentTable's DETAIL_H). In a modal we fill the host instead.
@@ -17,23 +17,96 @@
   let { t, inModal = false }: { t: TorrentRow; inModal?: boolean } = $props()
 
   const paused = $derived(t.status === 'stopped' || t.status === 'paused')
-  const pieceCount = $derived(Math.min(420, Math.max(60, Math.round(t.size / (1 << 20)))))
-  const have = $derived(Math.round(t.done * pieceCount))
+  // Piece counts: prefer the /pieces fetch's own counts so the map and the legend
+  // always agree (same snapshot); fall back to the live SSE chunk fields until that
+  // fetch lands.
+  const pcs = $derived({
+    size: detail.pieces?.sizeChunks ?? t.sizeChunks,
+    completed: detail.pieces?.completedChunks ?? t.completedChunks,
+    chunk: detail.pieces?.chunkSize ?? t.chunkSize,
+  })
+  // Real piece view from the fetched bitfield; falls back to a % bar when the
+  // bitfield isn't available (no metadata yet / partial without a bitfield).
+  const pieceView = $derived(decodePieces(detail.pieces?.bitfield ?? '', pcs.size, pcs.completed))
 
-  // ── activity graph ─────────────────────────────────────────────────────────
-  let frame = $state<Frame>('15m')
-  const baseDl = $derived(Math.max(t.downRate * 1.4, 1.5 * 1024 * 1024))
-  const baseUl = $derived(Math.max(t.upRate * 1.4, 400 * 1024))
-  // live 15m buffer — seeded from the REAL current rate so it reads full on open
-  // (idle torrents stay flat); live samples then scroll in each tick.
-  const live = rollingHistory(
-    () => ({ down: t.downRate, up: t.upRate }),
-    44,
-    () => frameSeries(t.hash, '15m', t.downRate, t.upRate),
-  )
-  const series = $derived(
-    frame === '15m' ? { dl: live.dl, ul: live.ul } : frameSeries(t.hash, frame, baseDl, baseUl),
-  )
+  // ── activity graph (real per-torrent history) ───────────────────────────────
+  // Throughput history comes from /api/history?hash=… — cumulative byte counters
+  // persisted per torrent in SQLite and derived to rates server-side. (Earlier
+  // builds drew a synthetic series here because the store kept no per-infohash
+  // data; it does now, so this is the real thing.)
+  type Point = { t: number; down: number; up: number }
+  const RANGES = [
+    { key: '15m', secs: 900 },
+    { key: '1h', secs: 3600 },
+    { key: '6h', secs: 21600 },
+    { key: '24h', secs: 86400 },
+    { key: '7d', secs: 604800 },
+    { key: '1y', secs: 31536000 },
+  ] as const
+
+  let range = $state('1h')
+  let points = $state<Point[]>([])
+  let firstTS = $state(0) // earliest sample we hold for this torrent (0 = unknown)
+  let now = $state(Date.now()) // re-stamped each poll so `enabled` re-evaluates as the torrent ages
+
+  // Offer only the ranges that hold data: every range shorter than the available
+  // span, plus the first one that fully covers it. A day-old torrent thus shows up
+  // to 24h (with 7d as "all") and hides 1y, instead of plotting a year of nothing.
+  // While availability is unknown (firstTS 0) keep every range clickable, so the
+  // default selection never renders as a disabled-but-active button.
+  const enabled = $derived.by(() => {
+    if (firstTS <= 0) return new Set(RANGES.map((r) => r.key))
+    const set = new Set<string>()
+    const span = now / 1000 - firstTS
+    for (const r of RANGES) {
+      set.add(r.key)
+      if (r.secs > span) break // covers the whole span; longer ranges add nothing
+    }
+    return set
+  })
+
+  // Guard against out-of-order responses: a slow fetch for a range/torrent the user
+  // has since left must not overwrite the current one — only the latest wins.
+  let reqSeq = 0
+  async function loadHistory() {
+    const seq = ++reqSeq
+    const wantRange = range,
+      wantHash = t.hash
+    now = Date.now()
+    const d = await silentGet<{ points: Point[]; first: number }>(
+      `/api/history?range=${wantRange}&hash=${wantHash}`,
+    )
+    if (seq !== reqSeq || wantRange !== range || wantHash !== t.hash || !d) return // stale
+    points = d.points ?? []
+    if (d.first) firstTS = d.first
+  }
+
+  // refetch on open, on range change, and when the modal is reused for another torrent;
+  // clear stale state on a torrent switch so the chart/buttons don't flash old data.
+  let lastHash = ''
+  $effect(() => {
+    range
+    if (t.hash !== lastHash) {
+      lastHash = t.hash
+      firstTS = 0
+      points = []
+    }
+    loadHistory()
+  })
+  // once availability is known, clamp the selection to a range that actually has data
+  $effect(() => {
+    if (firstTS > 0 && !enabled.has(range)) {
+      const last = RANGES.filter((r) => enabled.has(r.key)).at(-1)
+      if (last && last.key !== range) range = last.key
+    }
+  })
+  onMount(() => {
+    const id = setInterval(() => {
+      loadHistory()
+      detail.loadPieces() // keep the PIECES map live (no-op unless that tab is open)
+    }, 3000)
+    return () => clearInterval(id)
+  })
 
   const tabs: { key: DetailTab; label: string }[] = [
     { key: 'general', label: 'PIECES' },
@@ -47,9 +120,6 @@
     { v: 2, label: 'high' },
   ]
 
-  function peerFlags(p: PeerInfo): string {
-    return `${p.downRate > 0 ? 'D' : '·'}${p.upRate > 0 ? 'U' : '·'}${p.encrypted ? 'E' : '·'}${p.incoming ? 'I' : 'O'}`
-  }
 
   async function act(a: 'pause' | 'resume' | 'recheck' | 'remove') {
     try {
@@ -94,7 +164,7 @@
       <div class="rd-stat"><div class="rd-stat-l">tracker</div><div class="rd-stat-v">{t.tracker || '—'}</div></div>
     </div>
 
-    <!-- activity graph + timeframe selector (handover §4) -->
+    <!-- activity graph + timeframe selector — real per-torrent history -->
     <div class="rd-activity">
       <div class="rd-act-head">
         <span class="rd-act-rates">
@@ -102,12 +172,17 @@
           <span class="u">↑ {short(t.upRate)}<small>B/s</small></span>
         </span>
         <div class="rd-frames">
-          {#each FRAMES as f (f)}
-            <button class="rd-frame {frame === f ? 'on' : ''}" onclick={() => (frame = f)}>{f}</button>
+          {#each RANGES as r (r.key)}
+            <button
+              class="rd-frame {range === r.key ? 'on' : ''}"
+              disabled={!enabled.has(r.key)}
+              title={enabled.has(r.key) ? '' : 'no history for this range yet'}
+              onclick={() => (range = r.key)}
+            >{r.key}</button>
           {/each}
         </div>
       </div>
-      <SpeedGraph dl={series.dl} ul={series.ul} h={84} dlColor="var(--status-download)" ulColor="var(--status-seed)" glow grid strokeW={1.7} />
+      <TrafficChart {points} height={150} dlColor="var(--status-download)" ulColor="var(--status-seed)" />
     </div>
 
     <div class="rd-tabs">
@@ -120,13 +195,23 @@
   <div class="min-h-0 flex-1 overflow-auto px-5 pb-4">
     {#if detail.tab === 'general'}
       <div class="flex flex-col gap-3">
-        <PieceMap done={t.done} count={pieceCount} downloading={t.status === 'downloading'} />
-        <div class="rd-legend">
-          <span><i style="background:var(--primary)"></i> have · {have}</span>
-          <span><i style="background:var(--warn)"></i> downloading</span>
-          <span><i style="background:color-mix(in srgb,var(--primary) 14%,transparent)"></i> missing · {pieceCount - have}</span>
-          <span class="ml-auto font-mono text-dim">{pieceCount} pieces · {short(t.size / pieceCount)}B each</span>
-        </div>
+        {#if pieceView.mode === 'cells'}
+          <PieceMap cells={pieceView.cells} />
+        {:else}
+          <!-- no per-piece bitfield available — show the real done% bar, not a fake grid -->
+          <div class="h-2.5 w-full overflow-hidden rounded-sm" style="background:color-mix(in srgb,var(--primary) 12%,transparent)">
+            <div class="h-full" style="width:{Math.round(t.done * 100)}%; background:var(--primary)"></div>
+          </div>
+        {/if}
+        {#if pcs.size > 0}
+          <div class="rd-legend">
+            <span><i style="background:var(--primary)"></i> have · {pcs.completed}</span>
+            <span><i style="background:color-mix(in srgb,var(--primary) 14%,transparent)"></i> missing · {pcs.size - pcs.completed}</span>
+            <span class="ml-auto font-mono text-dim">{pcs.size} pieces · {short(pcs.chunk)}B each</span>
+          </div>
+        {:else}
+          <div class="rd-legend"><span class="font-mono text-dim">// piece data unavailable (no metadata yet)</span></div>
+        {/if}
       </div>
     {:else if detail.tab === 'files'}
       {#if detail.loading && detail.files.length === 0}

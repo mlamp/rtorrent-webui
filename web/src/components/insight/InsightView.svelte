@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import TrafficChart from './TrafficChart.svelte'
+  import TrafficChart from '../charts/TrafficChart.svelte'
   import { globals } from '$lib/stores/globals.svelte'
+  import { silentGet } from '$lib/api/client'
   import { short } from '$lib/format'
 
   type Point = { t: number; down: number; up: number }
@@ -11,20 +12,12 @@
   const ranges = ['15m', '1h', '6h', '24h', '7d']
 
   async function loadHistory() {
-    try {
-      const j = await (await fetch(`/api/history?range=${range}`)).json()
-      points = j?.data?.points ?? []
-    } catch {
-      /* ignore */
-    }
+    const d = await silentGet<{ points: Point[] }>(`/api/history?range=${range}`)
+    if (d) points = d.points ?? []
   }
   async function loadDisk() {
-    try {
-      const j = await (await fetch('/api/diskspace')).json()
-      disks = j?.data ?? []
-    } catch {
-      /* ignore */
-    }
+    const d = await silentGet<typeof disks>('/api/diskspace')
+    if (d) disks = d
   }
   function setRange(r: string) {
     range = r
@@ -57,7 +50,7 @@
         {/each}
       </div>
     </div>
-    <TrafficChart {points} {range} height={300} />
+    <TrafficChart {points} height={300} />
   </section>
 
   <section class="ip">

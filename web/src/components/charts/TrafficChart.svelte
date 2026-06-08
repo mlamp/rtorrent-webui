@@ -1,16 +1,20 @@
 <script lang="ts">
   // Relay-styled traffic chart: smooth down area + up line, labelled X/Y axes,
-  // and a hover crosshair with a date/time + rate tooltip.
+  // and a hover crosshair with a date/time + rate tooltip. Shared by the global
+  // INSIGHT traffic panel and the per-torrent detail graph — both feed it real
+  // {t,down,up} points from /api/history (per-torrent when a hash is passed).
   import { short } from '$lib/format'
 
   type Point = { t: number; down: number; up: number }
+  // Note: the X axis resolution derives from the actual data span (points[].t),
+  // not from a requested range — a "1y" request that returns a day of data is
+  // labelled in days. So there is intentionally no `range` prop here.
   let {
     points = [],
     height = 220,
-    range = '15m',
     dlColor = 'var(--status-download)',
     ulColor = 'var(--status-seed)',
-  }: { points?: Point[]; height?: number; range?: string; dlColor?: string; ulColor?: string } = $props()
+  }: { points?: Point[]; height?: number; dlColor?: string; ulColor?: string } = $props()
 
   let w = $state(700)
   let hover = $state<number | null>(null)
@@ -36,7 +40,9 @@
   const maxVal = $derived(niceMax(Math.max(...points.map((p) => Math.max(p.down, p.up)), 1)))
   const yTicks = $derived([0, 0.25, 0.5, 0.75, 1].map((f) => ({ f, v: maxVal * f })))
 
-  // ── time (X) axis ─ derived from the actual data span (handles tier fallback)
+  // ── time (X) axis ─ derived from the actual data span (handles tier fallback
+  // and short-history torrents: a "1y" request that only holds a day of data
+  // labels a day, not a year).
   const t0 = $derived(n ? points[0].t : 0)
   const t1 = $derived(n ? points[n - 1].t : 1)
   const span = $derived(Math.max(1, t1 - t0))
@@ -47,13 +53,17 @@
   function pad2(x: number) {
     return String(x).padStart(2, '0')
   }
-  function clock(t: number): string {
-    const d = new Date(t * 1000)
-    return span < 3 * 3600
-      ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
-      : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-  }
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  // Axis tick label: resolution scales with the visible span so the numbers stay
+  // meaningful — seconds when zoomed in, calendar dates when spanning days.
+  function axisLabel(t: number): string {
+    const d = new Date(t * 1000)
+    const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+    if (span <= 3 * 3600) return `${hm}:${pad2(d.getSeconds())}`
+    if (span <= 26 * 3600) return hm
+    if (span <= 4 * 86400) return `${MON[d.getMonth()]} ${d.getDate()} ${hm}`
+    return `${MON[d.getMonth()]} ${d.getDate()}`
+  }
   function fullTime(t: number): string {
     const d = new Date(t * 1000)
     const date = span > 24 * 3600 ? `${MON[d.getMonth()]} ${d.getDate()} ` : ''
@@ -65,7 +75,7 @@
     const count = Math.min(5, n)
     return Array.from({ length: count }, (_, k) => {
       const i = Math.round((k * (n - 1)) / (count - 1))
-      return { x: xOf(i), label: clock(points[i].t) }
+      return { x: xOf(i), label: axisLabel(points[i].t) }
     })
   })
 

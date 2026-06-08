@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/mlamp/rtorrent-webui/internal/scgi"
 )
@@ -14,9 +15,23 @@ import (
 // Client is a JSON-RPC client over SCGI.
 type Client struct {
 	scgi *scgi.Client
+
+	// trackerCache memoises each torrent's primary tracker host. The announce URL
+	// isn't returned by d.multicall2, so Poll enriches it with a per-hash t.multicall;
+	// the result is cached (invalidated on a tracker toggle, pruned when a torrent
+	// disappears) so steady-state polls do no extra work.
+	trackerMu    sync.RWMutex
+	trackerCache map[string]string
+
+	// batch defaults to c.Batch; a seam so enrichTrackers can be tested without SCGI.
+	batch func(context.Context, []BatchItem) ([]json.RawMessage, []error, error)
 }
 
-func New(s *scgi.Client) *Client { return &Client{scgi: s} }
+func New(s *scgi.Client) *Client {
+	c := &Client{scgi: s, trackerCache: map[string]string{}}
+	c.batch = c.Batch
+	return c
+}
 
 type rpcRequest struct {
 	JSONRPC string `json:"jsonrpc"`

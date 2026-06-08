@@ -1,5 +1,5 @@
-import { api } from '$lib/api/client'
-import type { FileInfo, PeerInfo, TrackerInfo } from '$lib/types/detail'
+import { api, silentGet } from '$lib/api/client'
+import type { FileInfo, PeerInfo, TrackerInfo, PiecesInfo } from '$lib/types/detail'
 
 export type DetailTab = 'general' | 'files' | 'peers' | 'trackers' | 'speed'
 
@@ -9,6 +9,7 @@ class DetailState {
   files = $state<FileInfo[]>([])
   peers = $state<PeerInfo[]>([])
   trackers = $state<TrackerInfo[]>([])
+  pieces = $state<PiecesInfo | null>(null)
   loading = $state(false)
 
   // client-side ring buffer of the active torrent's rates for the Speed tab
@@ -23,6 +24,7 @@ class DetailState {
     this.activeHash = hash
     this.speedDown = []
     this.speedUp = []
+    this.pieces = null
     this.load()
   }
   close() {
@@ -38,7 +40,8 @@ class DetailState {
     if (!h) return
     this.loading = true
     try {
-      if (this.tab === 'files') this.files = (await api.getFiles(h)) ?? []
+      if (this.tab === 'general') this.pieces = (await api.getPieces(h)) ?? null
+      else if (this.tab === 'files') this.files = (await api.getFiles(h)) ?? []
       else if (this.tab === 'peers') this.peers = (await api.getPeers(h)) ?? []
       else if (this.tab === 'trackers') this.trackers = (await api.getTrackers(h)) ?? []
     } catch {
@@ -46,6 +49,15 @@ class DetailState {
     } finally {
       this.loading = false
     }
+  }
+
+  // Silent refresh of the piece bitfield (no loading flag) so the PIECES map can
+  // update live while the tab stays open, without flickering a spinner.
+  async loadPieces() {
+    const h = this.activeHash
+    if (!h || this.tab !== 'general') return
+    const p = await silentGet<PiecesInfo>(`/api/torrents/${h}/pieces`)
+    if (p && this.activeHash === h && this.tab === 'general') this.pieces = p
   }
 
   pushSpeed(down: number, up: number) {

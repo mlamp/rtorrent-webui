@@ -17,7 +17,15 @@ export interface PeerInfo {
   progress: number // 0..100
   encrypted: boolean
   incoming: boolean
+  snubbed: boolean // real rtorrent protocol state (p.is_snubbed)
   country: string // ISO alpha-2 ("" if unknown)
+}
+
+export interface PiecesInfo {
+  bitfield: string // hex (MSB-first per byte); "0" sentinel = complete
+  sizeChunks: number
+  completedChunks: number
+  chunkSize: number
 }
 
 export interface TrackerInfo {

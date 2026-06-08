@@ -35,6 +35,12 @@ type Torrent struct {
 	Tracker        string `json:"tracker"`
 	Added          int64  `json:"added"`
 	Message        string `json:"message"`
+	// Real chunk/piece data (so the UI shows true piece counts/sizes instead of a
+	// size/1MiB guess). The per-piece bitfield is detail-scoped (model.Pieces), not
+	// carried per row — it's large and only needed when a detail panel is open.
+	SizeChunks      int64 `json:"sizeChunks"`
+	CompletedChunks int64 `json:"completedChunks"`
+	ChunkSize       int64 `json:"chunkSize"`
 }
 
 // DiffFrom returns a map of only the fields that differ from prev (plus hash),
@@ -92,6 +98,15 @@ func (t Torrent) DiffFrom(prev Torrent) map[string]any {
 	}
 	if t.Message != prev.Message {
 		m["message"] = t.Message
+	}
+	if t.SizeChunks != prev.SizeChunks {
+		m["sizeChunks"] = t.SizeChunks
+	}
+	if t.CompletedChunks != prev.CompletedChunks {
+		m["completedChunks"] = t.CompletedChunks
+	}
+	if t.ChunkSize != prev.ChunkSize {
+		m["chunkSize"] = t.ChunkSize
 	}
 	if len(m) == 0 {
 		return nil

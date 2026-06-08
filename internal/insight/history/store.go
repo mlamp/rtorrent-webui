@@ -69,7 +69,7 @@ type Store struct {
 
 // schemaVersion is the version this build expects; New() applies every
 // migration up to it. Bump it and append a migration when the schema changes.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // migration mutates the schema from version-1 to its version, inside a tx.
 type migration struct {
@@ -106,6 +106,21 @@ var migrations = []migration{
 				PRIMARY KEY (res, hash, ts)
 			) WITHOUT ROWID;
 			CREATE TABLE IF NOT EXISTS seen (hash TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);`)
+		return err
+	}},
+	{2, "per-torrent first_seen", func(tx *sql.Tx) error {
+		// Record the first time we observe each torrent so the UI can offer only
+		// the time ranges that actually have data. Rollup tiers stamp buckets at
+		// the bucket *start* (floor-to-minute/hour/day), so MIN(ts) across tiers
+		// can't answer "how old is this series" — a minute-old torrent would look
+		// up to a day old. A truthful first_seen avoids that.
+		if _, err := tx.Exec(`ALTER TABLE seen ADD COLUMN first_seen INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+		// Best-effort backfill for torrents already on record (coarse via the
+		// bucket-floored MIN, but better than 0; new torrents get the exact ts).
+		_, err := tx.Exec(`UPDATE seen SET first_seen =
+			COALESCE((SELECT MIN(ts) FROM samples WHERE samples.hash = seen.hash), 0)`)
 		return err
 	}},
 }
@@ -265,15 +280,28 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 		write(t.Hash, t.Completed, t.UpTotal)
 	}
 
-	// Refresh the `seen` set (for GC of removed torrents) at most once a minute.
+	// Record first sight *immediately* (unthrottled): first_seen must be the exact
+	// first-sample ts, since FirstTS uses it to gate the UI's time-range buttons.
+	// INSERT OR IGNORE is a cheap no-op once the row exists, so this costs a write
+	// only for genuinely new torrents; it also seeds last_seen so GC works before
+	// the first throttled refresh below.
+	if firstStmt, err := tx.Prepare(`INSERT OR IGNORE INTO seen(hash,first_seen,last_seen) VALUES(?,?,?)`); err == nil {
+		for _, t := range torrents {
+			_, _ = firstStmt.Exec(t.Hash, ts, ts)
+		}
+		firstStmt.Close()
+	}
+	// Advance last_seen (for GC of removed torrents) at most once a minute. The CASE
+	// also heals any first_seen left at 0 by the v2 backfill — adopting a current
+	// bound beats the bucket-floored MIN(ts) FirstTS would otherwise fall back to.
 	if ts-s.lastSeen >= 60 {
 		s.lastSeen = ts
-		seenStmt, err := tx.Prepare(`INSERT OR REPLACE INTO seen(hash,last_seen) VALUES(?,?)`)
-		if err == nil {
+		if upd, err := tx.Prepare(`UPDATE seen SET last_seen=?,
+			first_seen=CASE WHEN first_seen=0 THEN ? ELSE first_seen END WHERE hash=?`); err == nil {
 			for _, t := range torrents {
-				_, _ = seenStmt.Exec(t.Hash, ts)
+				_, _ = upd.Exec(ts, ts, t.Hash)
 			}
-			seenStmt.Close()
+			upd.Close()
 		}
 	}
 	ok = true
@@ -431,6 +459,31 @@ func decimate(pts []Point, target int) []Point {
 		out = append(out, Point{TS: pts[hi-1].TS, Down: sd / n, Up: su / n})
 	}
 	return out
+}
+
+// FirstTS returns when we first observed a hash, so the UI can offer only the
+// time ranges that actually have data (e.g. hide "1y" on a day-old torrent), or
+// 0 if we hold nothing for it. hash "" = global.
+//
+// It prefers the truthful per-torrent first_seen: rollup tiers stamp buckets at
+// the bucket start, so MIN(ts) across tiers would report a minute-old torrent as
+// up to a day old. It falls back to the earliest sample for series we don't track
+// in `seen` (the global "" series) or rows predating the first_seen backfill.
+func (s *Store) FirstTS(ctx context.Context, hash string) (int64, error) {
+	var fs sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT first_seen FROM seen WHERE hash=?`, hash).Scan(&fs); err == nil && fs.Valid && fs.Int64 > 0 {
+		return fs.Int64, nil
+	}
+	// Fallback restricted to the raw tier: its timestamps are exact (rollup tiers
+	// floor to the bucket start, so MIN across them could pre-date the first sample).
+	var ts sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MIN(ts) FROM samples WHERE res='raw' AND hash=?`, hash).Scan(&ts); err != nil {
+		return 0, err
+	}
+	if !ts.Valid {
+		return 0, nil
+	}
+	return ts.Int64, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

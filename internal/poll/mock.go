@@ -12,12 +12,10 @@ import (
 // frontend table without a real swarm. Deterministic (no RNG) so runs reproduce.
 func MockSource(n int) Source {
 	labels := []string{"linux", "movies", "music", "science", ""}
-	trackers := []string{
-		"https://bgp.technology/announce",
-		"https://empirehost.me/announce",
-		"udp://tracker.opentrackr.org:1337/announce",
-		"https://hd-space.pw/announce",
-	}
+	// Hosts (not full announce URLs): matches what the real poll path stores in
+	// Torrent.Tracker after enrichment, so -mock exercises the same shape.
+	trackers := []string{"bgp.technology", "empirehost.me", "tracker.opentrackr.org", "hd-space.pw"}
+	chunkSizes := []int64{256 << 10, 512 << 10, 1 << 20, 2 << 20, 4 << 20} // realistic power-of-two piece sizes
 	names := []string{
 		"ubuntu-24.04.2-desktop-amd64", "debian-12.5.0-amd64-netinst",
 		"Sintel.2010.2160p.UHD.BluRay.x265", "Big.Buck.Bunny.1080p.h264",
@@ -26,16 +24,20 @@ func MockSource(n int) Source {
 	}
 	tor := make([]model.Torrent, n)
 	for i := range tor {
+		size := int64(200<<20) + int64(i)*(7<<20)
+		chunk := chunkSizes[i%len(chunkSizes)]
 		tor[i] = model.Torrent{
 			Hash:           fmt.Sprintf("%040X", i+1),
 			Name:           fmt.Sprintf("%s.%05d.bin", names[i%len(names)], i),
-			Size:           int64(200<<20) + int64(i)*(7<<20),
+			Size:           size,
 			Completed:      int64(i%5) * (10 << 20),
 			Label:          labels[i%len(labels)],
 			Tracker:        trackers[i%len(trackers)],
 			Status:         model.StatusSeeding,
 			PeersTotal:     int64(i % 200),
 			SeedsConnected: int64(i % 12),
+			ChunkSize:      chunk,
+			SizeChunks:     (size + chunk - 1) / chunk,
 		}
 	}
 	tick := 0
@@ -74,6 +76,12 @@ func MockSource(n int) Source {
 				} else {
 					t.UpRate = 0
 				}
+			}
+			// keep completed chunks consistent with completed bytes
+			if t.Completed >= t.Size {
+				t.CompletedChunks = t.SizeChunks
+			} else {
+				t.CompletedChunks = t.Completed / t.ChunkSize
 			}
 			g.DownRate += t.DownRate
 			g.UpRate += t.UpRate

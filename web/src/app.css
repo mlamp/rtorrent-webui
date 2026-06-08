@@ -889,6 +889,13 @@ body {
 .rd-frame:hover {
   color: var(--dim2);
 }
+.rd-frame:disabled {
+  opacity: 0.28;
+  cursor: default;
+}
+.rd-frame:disabled:hover {
+  color: var(--dim);
+}
 .rd-frame.on {
   color: var(--acc);
   background: color-mix(in srgb, var(--primary) 12%, transparent);

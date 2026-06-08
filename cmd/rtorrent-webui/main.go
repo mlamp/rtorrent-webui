@@ -95,6 +95,9 @@ func main() {
 	srv := api.New(hub, rpcClient, cfg.Rtorrent.View)
 	srv.SetSearch(search.NewRegistry()) // seam only in v1
 	srv.SetDirs(cfg.Downloads.Dirs)
+	if *mock > 0 {
+		srv.SetDetailRPC(poll.NewMockDetail()) // detail tabs work without a live rtorrent
+	}
 
 	if cfg.Insight.GeoIPDB != "" {
 		if g, err := geoip.New(cfg.Insight.GeoIPDB); err == nil {

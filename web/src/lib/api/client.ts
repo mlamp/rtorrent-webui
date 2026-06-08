@@ -21,6 +21,20 @@ function jsonBody(body: unknown): RequestInit {
   return { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
 }
 
+/**
+ * Silent GET for pollers (history/diskspace): returns the unwrapped `data`
+ * payload, or null on any network/parse error. Unlike `req`, it never raises a
+ * toast — a transient blip on a 3s poll must not spam the user.
+ */
+export async function silentGet<T>(url: string): Promise<T | null> {
+  try {
+    const j = await (await fetch(url)).json()
+    return (j?.data ?? null) as T | null
+  } catch {
+    return null
+  }
+}
+
 export const api = {
   start: (h: string) => req('POST', `/api/torrents/${h}/start`),
   stop: (h: string) => req('POST', `/api/torrents/${h}/stop`),
@@ -47,6 +61,7 @@ export const api = {
   getFiles: (h: string) => req('GET', `/api/torrents/${h}/files`),
   getPeers: (h: string) => req('GET', `/api/torrents/${h}/peers`),
   getTrackers: (h: string) => req('GET', `/api/torrents/${h}/trackers`),
+  getPieces: (h: string) => req('GET', `/api/torrents/${h}/pieces`),
   setFilePriority: (h: string, index: number, priority: number) =>
     req('PUT', `/api/torrents/${h}/files/${index}/priority`, jsonBody({ priority })),
   setTrackerEnabled: (h: string, index: number, enabled: boolean) =>

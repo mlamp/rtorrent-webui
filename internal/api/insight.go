@@ -11,17 +11,28 @@ import (
 	"github.com/mlamp/rtorrent-webui/internal/insight/search"
 )
 
-// parseRange turns "15m"/"6h"/"7d"/"1w" into seconds. time.ParseDuration has no
-// day/week unit, so handle those, then fall back to it (default 1h).
+// parseRange turns "15m"/"6h"/"7d"/"1w"/"3mo"/"1y" into seconds. time.ParseDuration
+// has no day/week/month/year unit, so handle those, then fall back to it (default 1h).
 func parseRange(s string) int64 {
 	s = strings.TrimSpace(s)
+	// two-char "mo" (months) before the single-char units
+	if n := len(s); n >= 3 && s[n-2:] == "mo" {
+		if v, err := strconv.ParseFloat(s[:n-2], 64); err == nil && v > 0 {
+			return int64(v * 30 * 86400)
+		}
+	}
 	if n := len(s); n >= 2 {
-		if u := s[n-1]; u == 'd' || u == 'w' {
+		mult := 0.0
+		switch s[n-1] {
+		case 'd':
+			mult = 86400
+		case 'w':
+			mult = 7 * 86400
+		case 'y':
+			mult = 365 * 86400
+		}
+		if mult > 0 {
 			if v, err := strconv.ParseFloat(s[:n-1], 64); err == nil && v > 0 {
-				mult := 86400.0
-				if u == 'w' {
-					mult = 7 * 86400.0
-				}
 				return int64(v * mult)
 			}
 		}
@@ -48,13 +59,14 @@ func (s *Server) handleDiskspace(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if s.history == nil {
-		writeOK(w, map[string]any{"points": []any{}})
+		writeOK(w, map[string]any{"points": []any{}, "first": 0})
 		return
 	}
 	rng := parseRange(r.URL.Query().Get("range"))
+	hash := r.URL.Query().Get("hash")
 	ctx, cancel := reqCtx(r)
 	defer cancel()
-	pts, err := s.history.Query(ctx, rng, r.URL.Query().Get("hash"))
+	pts, err := s.history.Query(ctx, rng, hash)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "history_error", err.Error())
 		return
@@ -62,7 +74,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if pts == nil {
 		pts = []history.Point{}
 	}
-	writeOK(w, map[string]any{"points": pts})
+	// Earliest sample we hold for this series, so the client can offer only the
+	// time ranges that have data (e.g. hide "1y" on a day-old torrent).
+	first, _ := s.history.FirstTS(ctx, hash)
+	writeOK(w, map[string]any{"points": pts, "first": first})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {

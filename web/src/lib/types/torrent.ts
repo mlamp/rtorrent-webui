@@ -25,6 +25,9 @@ export interface TorrentWire {
   tracker: string
   added: number
   message: string
+  sizeChunks: number
+  completedChunks: number
+  chunkSize: number
 }
 
 export type TorrentPatch = Partial<TorrentWire> & { hash: string }

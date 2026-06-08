@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 
 	"github.com/mlamp/rtorrent-webui/internal/model"
@@ -32,6 +33,9 @@ var torrentFields = []string{
 	"d.peers_complete=",      // 17
 	"d.left_bytes=",          // 18
 	"d.creation_date=",       // 19
+	"d.size_chunks=",         // 20
+	"d.completed_chunks=",    // 21
+	"d.chunk_size=",          // 22
 }
 
 // Poll fetches the full torrent list for a view plus global stats in ONE batched
@@ -81,7 +85,104 @@ func (c *Client) Poll(ctx context.Context, view string) ([]model.Torrent, model.
 			g.ActiveCount++
 		}
 	}
+	c.enrichTrackers(ctx, torrents)
 	return torrents, g, nil
+}
+
+// enrichTrackers fills t.Tracker with each torrent's primary tracker host.
+// d.multicall2 can't return the announce URL, so we fetch t.url/t.is_enabled per
+// hash — but only for hashes we haven't cached yet (the host is static), batched
+// into a single SCGI round-trip. Best-effort: a failed/empty lookup is left blank
+// and retried next poll, never cached as a false value.
+func (c *Client) enrichTrackers(ctx context.Context, torrents []model.Torrent) {
+	// Prune cache entries for torrents no longer present (bounds growth on a daemon
+	// that runs for weeks with add/remove churn), and collect the uncached hashes.
+	present := make(map[string]struct{}, len(torrents))
+	for i := range torrents {
+		present[torrents[i].Hash] = struct{}{}
+	}
+	var needIdx []int
+	c.trackerMu.Lock()
+	for h := range c.trackerCache {
+		if _, ok := present[h]; !ok {
+			delete(c.trackerCache, h)
+		}
+	}
+	for i := range torrents {
+		if host, ok := c.trackerCache[torrents[i].Hash]; ok {
+			torrents[i].Tracker = host
+		} else {
+			needIdx = append(needIdx, i)
+		}
+	}
+	c.trackerMu.Unlock()
+	if len(needIdx) == 0 {
+		return
+	}
+
+	items := make([]BatchItem, len(needIdx))
+	for j, i := range needIdx {
+		items[j] = BatchItem{Method: "t.multicall", Params: []any{torrents[i].Hash, "", "t.url=", "t.is_enabled="}}
+	}
+	results, errs, err := c.batch(ctx, items)
+	if err != nil {
+		return // transport error: leave blank, retry next poll
+	}
+
+	c.trackerMu.Lock()
+	defer c.trackerMu.Unlock()
+	for j, i := range needIdx {
+		if errs[j] != nil {
+			continue // failed row: leave blank, NOT cached, retried next poll
+		}
+		if host := primaryTrackerHost(results[j]); host != "" {
+			c.trackerCache[torrents[i].Hash] = host
+			torrents[i].Tracker = host
+		}
+	}
+}
+
+// primaryTrackerHost picks the host of the first enabled tracker (falling back to
+// the first tracker) from a t.multicall result of [url, is_enabled] rows. Returning
+// the host (not the full announce URL) keeps passkeys out of the UI and lets the
+// sidebar group torrents by tracker correctly.
+func primaryTrackerHost(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var rows [][]json.RawMessage
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return ""
+	}
+	first := ""
+	for _, r := range rows {
+		if len(r) < 2 {
+			continue
+		}
+		host := trackerHost(asStr(r[0]))
+		if host == "" {
+			continue
+		}
+		if first == "" {
+			first = host
+		}
+		if asIntRaw(r[1]) != 0 {
+			return host // prefer an enabled tracker
+		}
+	}
+	return first
+}
+
+// trackerHost extracts the host from an announce URL ("https://t.example/announce:80"
+// -> "t.example"); falls back to the raw string for unparseable inputs.
+func trackerHost(announce string) string {
+	if announce == "" {
+		return ""
+	}
+	if u, err := url.Parse(announce); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return announce
 }
 
 func decodeTorrents(raw json.RawMessage) ([]model.Torrent, error) {
@@ -109,10 +210,13 @@ func decodeTorrents(raw json.RawMessage) ([]model.Torrent, error) {
 			Ratio:          asIntRaw(r[7]),
 			Label:          asStr(r[13]),
 			Directory:      asStr(r[14]),
-			PeersConnected: asIntRaw(r[15]),
-			SeedsConnected: asIntRaw(r[17]),
-			Added:          asIntRaw(r[19]),
-			Message:        asStr(r[12]),
+			PeersConnected:  asIntRaw(r[15]),
+			SeedsConnected:  asIntRaw(r[17]),
+			Added:           asIntRaw(r[19]),
+			Message:         asStr(r[12]),
+			SizeChunks:      asIntRaw(r[20]),
+			CompletedChunks: asIntRaw(r[21]),
+			ChunkSize:       asIntRaw(r[22]),
 		}
 		t.PeersTotal = t.PeersConnected + asIntRaw(r[16])
 		t.SeedsTotal = t.SeedsConnected

@@ -24,6 +24,39 @@ func tierCount(t *testing.T, s *Store, res string) int {
 	return n
 }
 
+// FirstTS must report the exact first-sight ts even when the seen-refresh would be
+// throttled (process already running >60s) and a rollup has stamped bucket-floored
+// rows into the coarse tiers. Regression for the "reports a time before the torrent
+// existed" bug that defeated the adaptive range-button gating.
+func TestFirstTSTruthfulDespiteThrottleAndRollup(t *testing.T) {
+	s, err := New(t.TempDir() + "/fs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const base = 1_700_000_000
+	s.now = func() int64 { return base }
+	s.lastSeen = base // simulate a seen-refresh moments ago, so base+5 is throttled
+
+	// Torrent first observed 5s later (within the throttle window).
+	s.Sample([]model.Torrent{{Hash: "BBB", Completed: 1 << 20, UpTotal: 1 << 10}}, model.Globals{}, base+5)
+	// Rollup floors a 1d bucket to midnight (~base-80000s) — the trap MIN(all tiers) would hit.
+	s.now = func() int64 { return base + 5 }
+	s.maintain()
+
+	got, err := s.FirstTS(context.Background(), "BBB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got < base {
+		t.Fatalf("FirstTS=%d reports BEFORE the first observation (%d) — bucket-floor leak", got, base+5)
+	}
+	if got != base+5 {
+		t.Fatalf("FirstTS=%d, want exact first-sight %d", got, base+5)
+	}
+}
+
 func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	s, err := New(t.TempDir() + "/h.db")
 	if err != nil {

@@ -1,5 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity'
 import type { Status, TorrentWire, TorrentPatch } from '$lib/types/torrent'
+import { nextSmoothRate, etaSecondsFor } from '$lib/eta'
 
 /**
  * One torrent row. Each field is an independent $state signal, so a delta that
@@ -25,15 +26,18 @@ export class TorrentRow {
   tracker = $state('')
   added = $state(0)
   message = $state('')
+  sizeChunks = $state(0)
+  completedChunks = $state(0)
+  chunkSize = $state(0)
 
   // transient: true for ~1.4s after a download completes (drives the row sweep)
   sweeping = $state(false)
+  // EWMA of downRate so the ETA estimate doesn't swing with per-tick rate jitter
+  smoothRate = $state(0)
 
   done = $derived(this.size > 0 ? this.completed / this.size : 0)
-  etaSeconds = $derived.by(() => {
-    const left = this.size - this.completed
-    return left > 0 && this.downRate > 0 ? left / this.downRate : Infinity
-  })
+  // '—' when done or stalled; otherwise estimate from the smoothed rate.
+  etaSeconds = $derived(etaSecondsFor(this.size - this.completed, this.downRate, this.smoothRate))
 
   constructor(hash: string) {
     this.hash = hash
@@ -51,7 +55,10 @@ export class TorrentRow {
     if (p.name !== undefined) this.name = p.name
     if (p.size !== undefined) this.size = p.size
     if (p.completed !== undefined) this.completed = p.completed
-    if (p.downRate !== undefined) this.downRate = p.downRate
+    if (p.downRate !== undefined) {
+      this.downRate = p.downRate
+      this.smoothRate = nextSmoothRate(this.smoothRate, p.downRate)
+    }
     if (p.upRate !== undefined) this.upRate = p.upRate
     if (p.upTotal !== undefined) this.upTotal = p.upTotal
     if (p.ratio !== undefined) this.ratio = p.ratio
@@ -65,6 +72,9 @@ export class TorrentRow {
     if (p.tracker !== undefined) this.tracker = p.tracker
     if (p.added !== undefined) this.added = p.added
     if (p.message !== undefined) this.message = p.message
+    if (p.sizeChunks !== undefined) this.sizeChunks = p.sizeChunks
+    if (p.completedChunks !== undefined) this.completedChunks = p.completedChunks
+    if (p.chunkSize !== undefined) this.chunkSize = p.chunkSize
 
     // a torrent that just finished (downloading -> seeding) gets a sweep flourish
     if (p.status !== undefined && prevStatus === 'downloading' && p.status === 'seeding') {

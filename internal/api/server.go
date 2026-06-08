@@ -24,6 +24,7 @@ var Version = "dev"
 type Server struct {
 	hub     *sse.Hub
 	rpc     *rpc.Client
+	detail  DetailRPC // detail-tab data source (defaults to rpc; swapped in -mock mode)
 	view    string
 	geo     GeoLookup
 	dirs    []string
@@ -41,10 +42,14 @@ func New(hub *sse.Hub, r *rpc.Client, view string) *Server {
 	if view == "" {
 		view = "main"
 	}
-	s := &Server{hub: hub, rpc: r, view: view, mux: http.NewServeMux()}
+	s := &Server{hub: hub, rpc: r, detail: r, view: view, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
+
+// SetDetailRPC overrides the source for the detail tabs (files/peers/trackers/
+// pieces). Used by -mock mode so the detail view works without a live rtorrent.
+func (s *Server) SetDetailRPC(d DetailRPC) { s.detail = d }
 
 func (s *Server) Handler() http.Handler { return s.mux }
 

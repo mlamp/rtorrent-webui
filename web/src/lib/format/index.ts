@@ -3,7 +3,8 @@ const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']
 /** Human-readable binary size. */
 export function bytes(n: number, digits = 1): string {
   if (!n || n <= 0) return '0 B'
-  const i = Math.min(UNITS.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
+  // Clamp the exponent to >= 0 so sub-1 inputs don't index UNITS[-1] (undefined).
+  const i = Math.min(UNITS.length - 1, Math.max(0, Math.floor(Math.log(n) / Math.log(1024))))
   const v = n / Math.pow(1024, i)
   return `${i === 0 ? v : v.toFixed(digits)} ${UNITS[i]}`
 }
@@ -17,7 +18,9 @@ export function rate(n: number): string {
 export function short(n: number): string {
   if (!n || n <= 0) return '0'
   const u = ['', 'K', 'M', 'G', 'T', 'P']
-  const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)))
+  // Clamp the exponent to >= 0 so sub-1 inputs (e.g. fractional axis ticks) don't
+  // index u[-1] (undefined) and render as "256.0undefined".
+  const i = Math.min(u.length - 1, Math.max(0, Math.floor(Math.log(n) / Math.log(1024))))
   const v = n / Math.pow(1024, i)
   return `${i === 0 ? v : v.toFixed(1)}${u[i]}`
 }
@@ -33,9 +36,9 @@ export function percent(frac: number): string {
   return `${p >= 100 ? 100 : p.toFixed(p < 10 ? 1 : 0)}%`
 }
 
-/** Seconds remaining → compact ETA. */
+/** Seconds remaining → compact ETA. '—' when unknown (done, stalled, or idle). */
 export function eta(seconds: number): string {
-  if (!isFinite(seconds) || seconds <= 0) return '∞'
+  if (!isFinite(seconds) || seconds <= 0) return '—'
   let s = Math.floor(seconds)
   const d = Math.floor(s / 86400)
   s %= 86400
