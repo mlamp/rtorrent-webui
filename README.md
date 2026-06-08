@@ -73,7 +73,7 @@ it, or override individual settings with flags. See
 | `auth.mode` | `none` (trust a reverse proxy) or `basic` |
 | `auth.users` / `auth.htpasswd_file` | bcrypt credentials for basic auth |
 | `downloads.dirs` | dirs for the disk-space widget |
-| `insight.history_db` | SQLite path for traffic history (e.g. `/data/history.db`) |
+| `insight.history_db` | SQLite path for traffic history (e.g. `/data/history.db`); stores cumulative counters, derives rates, rolls up raw 15m → 1m 24h → 1h 7d → 1d 1y |
 | `insight.geoip_db` | MaxMind/DB-IP `.mmdb` for peer country flags (optional) |
 | `features.rpc_passthrough` | enable `POST /api/rpc` (allow/deny lists) |
 
