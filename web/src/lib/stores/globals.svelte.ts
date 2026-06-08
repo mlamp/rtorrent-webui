@@ -17,6 +17,12 @@ class GlobalsState {
   dlHist = $state<number[]>(Array(60).fill(0))
   ulHist = $state<number[]>(Array(60).fill(0))
 
+  // increments once per poll snapshot/delta. Components that keep their OWN
+  // rolling per-torrent buffers (grid cards, the open detail graph) depend on
+  // this so their sparklines advance every tick without the store carrying an
+  // O(n) history array for every torrent.
+  tick = $state(0)
+
   apply(g: GlobalsWire) {
     this.downRate = g.downRate
     this.upRate = g.upRate
@@ -28,6 +34,7 @@ class GlobalsState {
     this.activeCount = g.activeCount
     this.dlHist = [...this.dlHist.slice(1), g.downRate]
     this.ulHist = [...this.ulHist.slice(1), g.upRate]
+    this.tick++
   }
 }
 

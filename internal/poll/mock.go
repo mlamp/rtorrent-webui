@@ -12,6 +12,12 @@ import (
 // frontend table without a real swarm. Deterministic (no RNG) so runs reproduce.
 func MockSource(n int) Source {
 	labels := []string{"linux", "movies", "music", "science", ""}
+	trackers := []string{
+		"https://bgp.technology/announce",
+		"https://empirehost.me/announce",
+		"udp://tracker.opentrackr.org:1337/announce",
+		"https://hd-space.pw/announce",
+	}
 	names := []string{
 		"ubuntu-24.04.2-desktop-amd64", "debian-12.5.0-amd64-netinst",
 		"Sintel.2010.2160p.UHD.BluRay.x265", "Big.Buck.Bunny.1080p.h264",
@@ -26,6 +32,7 @@ func MockSource(n int) Source {
 			Size:           int64(200<<20) + int64(i)*(7<<20),
 			Completed:      int64(i%5) * (10 << 20),
 			Label:          labels[i%len(labels)],
+			Tracker:        trackers[i%len(trackers)],
 			Status:         model.StatusSeeding,
 			PeersTotal:     int64(i % 200),
 			SeedsConnected: int64(i % 12),

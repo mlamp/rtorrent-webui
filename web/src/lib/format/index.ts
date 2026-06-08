@@ -49,6 +49,14 @@ export function eta(seconds: number): string {
   return `${s}s`
 }
 
+/** Host of a tracker announce URL ("https://bgp.technology/announce" → "bgp.technology").
+ *  Falls back to the raw string for non-URLs; "" stays "". */
+export function trackerHost(u: string): string {
+  if (!u) return ''
+  const m = u.replace(/^[a-z]+:\/\//i, '').match(/^([^/:]+)/)
+  return m ? m[1] : u
+}
+
 /** Epoch seconds → "3d ago" style. */
 export function relativeTime(epoch: number): string {
   if (!epoch) return '—'

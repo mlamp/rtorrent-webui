@@ -1,13 +1,14 @@
 <script lang="ts">
+  import { flagEmojiSupported, codeToFlag } from '$lib/flags'
+
   let { code = '' }: { code?: string } = $props()
 
-  const flag = $derived(
-    code && code.length === 2
-      ? String.fromCodePoint(
-          ...[...code.toUpperCase()].map((ch) => 0x1f1e6 + ch.charCodeAt(0) - 65),
-        )
-      : '🏳️',
-  )
+  const cc = $derived(code && code.length === 2 ? code.toUpperCase() : '')
+  const flag = $derived(codeToFlag(cc))
 </script>
 
-<span title={code || 'unknown'}>{flag}</span>
+{#if cc && flagEmojiSupported}
+  <span class="cc-flag" title={cc}>{flag}</span>
+{:else}
+  <span class="cc-code" title={cc || 'unknown'}>{cc || '··'}</span>
+{/if}

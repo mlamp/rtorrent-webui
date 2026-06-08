@@ -28,28 +28,21 @@
   }
 </script>
 
-<Modal bind:open title="Global rate limits">
-  <div class="flex flex-col gap-4">
-    <p class="text-sm text-muted-foreground">Set to 0 for unlimited.</p>
-    <label class="flex items-center justify-between gap-3 text-sm">
-      <span>Download</span>
-      <span class="flex items-center gap-1">
-        <input type="number" min="0" bind:value={down} class="h-9 w-28 rounded-md border bg-background px-2 text-right tabular-nums outline-none focus:ring-2 focus:ring-ring/50" />
-        <span class="text-muted-foreground">KiB/s</span>
-      </span>
-    </label>
-    <label class="flex items-center justify-between gap-3 text-sm">
-      <span>Upload</span>
-      <span class="flex items-center gap-1">
-        <input type="number" min="0" bind:value={up} class="h-9 w-28 rounded-md border bg-background px-2 text-right tabular-nums outline-none focus:ring-2 focus:ring-ring/50" />
-        <span class="text-muted-foreground">KiB/s</span>
-      </span>
-    </label>
-    <div class="flex justify-end gap-2">
-      <button onclick={() => (open = false)} class="rounded-md border px-3 py-1.5 text-sm hover:bg-accent">Cancel</button>
-      <button onclick={apply} disabled={busy} class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50">
-        {busy ? 'Applying…' : 'Apply'}
-      </button>
-    </div>
-  </div>
+<Modal bind:open title="rtorrent.throttle" sd="$" width={440}>
+  <p class="mb-3 text-[11px] text-dim">// set to 0 for unlimited</p>
+  <label class="opt-row mb-3">
+    <span class="flex-1 text-[10px] uppercase tracking-[0.14em] text-dim">↓ download</span>
+    <input type="number" min="0" bind:value={down} class="inp w-28 text-right tabular-nums" style="flex:none" />
+    <span class="text-[11px] text-dim">KiB/s</span>
+  </label>
+  <label class="opt-row">
+    <span class="flex-1 text-[10px] uppercase tracking-[0.14em] text-dim">↑ upload</span>
+    <input type="number" min="0" bind:value={up} class="inp w-28 text-right tabular-nums" style="flex:none" />
+    <span class="text-[11px] text-dim">KiB/s</span>
+  </label>
+
+  {#snippet footer()}
+    <button class="rd-btn sp" onclick={() => (open = false)}>CANCEL</button>
+    <button class="tbtn acc" style={busy ? 'opacity:.4;pointer-events:none' : ''} onclick={apply}>{busy ? 'APPLYING…' : 'APPLY'}</button>
+  {/snippet}
 </Modal>

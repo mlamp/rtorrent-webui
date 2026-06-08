@@ -54,7 +54,7 @@
   <svg width="100%" height={h} viewBox="0 0 {w} {h}" preserveAspectRatio="none" style="display:block;overflow:visible">
     <defs>
       <linearGradient id="{uid}-f" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color={dlColor} stop-opacity="0.4" />
+        <stop offset="0%" stop-color={dlColor} stop-opacity={glow ? 0.45 : 0.28} />
         <stop offset="100%" stop-color={dlColor} stop-opacity="0" />
       </linearGradient>
       {#if glow}

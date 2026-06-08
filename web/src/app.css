@@ -171,7 +171,7 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--primary) 24%, transparent);
+  background: color-mix(in srgb, var(--primary) 22%, transparent);
   border-radius: 2px;
   border: 2px solid var(--background);
 }
@@ -210,8 +210,8 @@ body {
 /* ---- segmented "waveform" progress ---- */
 .seg {
   display: flex;
-  gap: 2px;
-  height: 17px;
+  gap: 1.5px;
+  height: 13px;
   flex: 1;
   min-width: 0;
   align-items: stretch;
@@ -220,18 +220,18 @@ body {
   flex: 1;
   border-radius: 1px;
   /* always-visible track so the full bar reads even at low progress */
-  background: color-mix(in srgb, var(--primary) 17%, transparent);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 .seg .sg.on {
   background: var(--seg-c, var(--primary));
-  box-shadow: 0 0 6px var(--seg-c, var(--primary));
+  box-shadow: 0 0 5px var(--seg-c, var(--primary));
 }
 .seg .sg.lead {
-  /* bright near-white leading edge that breathes */
-  background: color-mix(in srgb, var(--seg-c, var(--primary)) 35%, white);
-  box-shadow: 0 0 9px var(--seg-c, var(--primary));
+  /* bright leading edge that breathes (reference: solid seg colour, opacity pulse) */
+  background: var(--seg-c, var(--primary));
+  box-shadow: 0 0 7px var(--seg-c, var(--primary));
   will-change: opacity;
-  animation: breathe 1.6s ease-in-out infinite;
+  animation: breathe 1.15s ease-in-out infinite;
 }
 .seg .sg.flash {
   animation: flash 0.6s ease-out;
@@ -240,7 +240,7 @@ body {
 @keyframes breathe {
   0%,
   100% {
-    opacity: 0.5;
+    opacity: 0.35;
   }
   50% {
     opacity: 1;
@@ -294,6 +294,15 @@ body {
 .caret-blink {
   animation: blink 1.05s steps(1) infinite;
 }
+/* terminal search caret — always blinking, always glowing (Relay .caret) */
+.caret {
+  color: var(--primary);
+  margin-left: -6px;
+  animation: blink 1.05s steps(1) infinite;
+}
+.dark .caret {
+  text-shadow: 0 0 8px var(--primary);
+}
 
 /* inline detail accordion appear (layout-stable: only fades/translates content) */
 @keyframes detailin {
@@ -334,7 +343,30 @@ body {
   box-shadow: inset 3px 0 0 var(--primary);
 }
 .trow.selected {
-  background: color-mix(in srgb, var(--primary) 6%, transparent);
+  background: color-mix(in srgb, var(--acc2) 5.5%, transparent);
+}
+.trow.selected:hover {
+  background: color-mix(in srgb, var(--acc2) 8.5%, transparent);
+}
+/* keyboard cursor: a glowing left bar (teal; becomes blue when the row is open) */
+.trow.cursor::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--acc2);
+  box-shadow: 0 0 8px var(--acc2);
+  z-index: 2;
+}
+.trow.open.cursor::before {
+  background: var(--primary);
+  box-shadow: 0 0 8px var(--primary);
+}
+/* steady teal inner glow while the completion sweep plays */
+.trow.sweep {
+  box-shadow: inset 0 0 30px color-mix(in srgb, var(--acc2) 18%, transparent);
 }
 
 /* brand */
@@ -584,12 +616,25 @@ body {
   background: var(--dim);
 }
 .rd-cc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Where flag emoji render (macOS, Windows, mobile, Firefox): a clean, legible
+   flag, no box. */
+.cc-flag {
+  font-size: 16px;
+  line-height: 1;
+}
+/* Fallback where they don't (Chrome/Chromium on Linux, tofu envs): a tidy
+   2-letter code badge — the box stays here so the bare code reads as intentional. */
+.cc-code {
   font-size: 10px;
   color: var(--dim2);
   border: 1px solid var(--line);
   border-radius: 2px;
-  text-align: center;
-  padding: 1px 0;
+  padding: 1px 3px;
+  letter-spacing: 0.02em;
 }
 
 /* terminal search bar */
@@ -603,4 +648,926 @@ body {
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--primary) 20%, transparent),
     0 0 18px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* ============================================================================
+   Relay component classes — ported from the reference prototype, tokenised so
+   the light theme keeps working (rgba(74,163,255,x) -> color-mix primary,
+   rgba(57,224,200,x) -> color-mix acc2). Values match Torui - Relay.html.
+   ========================================================================== */
+
+/* ---- custom select checkbox (.chk) ---- */
+.selcell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chk {
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--dim);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: transparent;
+  cursor: pointer;
+  flex: none;
+  transition:
+    border-color 0.12s,
+    background 0.12s;
+}
+.chk:hover {
+  border-color: var(--acc2);
+}
+.chk.on {
+  background: var(--acc2);
+  border-color: var(--acc2);
+  color: var(--background);
+}
+.chk.part {
+  border-color: var(--acc2);
+  color: var(--acc2);
+}
+
+/* ---- sort affordance ---- */
+.sarrow {
+  font-size: 8px;
+  opacity: 0.45;
+  line-height: 1;
+}
+.sortable.act .sarrow {
+  opacity: 1;
+}
+
+/* ---- empty state ---- */
+.empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--dim);
+}
+.empty b {
+  color: var(--acc2);
+}
+
+/* ---- RATE cell morph (handover §3) ---- */
+.rate {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.2;
+  font-size: 11.5px;
+  overflow: hidden;
+}
+.rate .ln {
+  display: block;
+  white-space: nowrap;
+  max-height: 15px;
+  opacity: 1;
+  transition:
+    max-height 0.34s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.26s ease,
+    font-size 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.3s ease,
+    margin 0.3s ease;
+}
+.rate .ln.d {
+  color: var(--acc);
+}
+.rate .ln.u {
+  color: var(--acc2);
+}
+.rate .ln.idle {
+  color: var(--dim);
+  letter-spacing: 0.06em;
+  font-size: 10.5px;
+}
+.rate .ln.off {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-3px);
+  margin: 0;
+}
+.rate .ln.solo {
+  font-size: 14px;
+  font-weight: 600;
+  max-height: 22px;
+  letter-spacing: -0.01em;
+  text-shadow: 0 0 9px currentColor;
+}
+.rate .ln.idle.solo {
+  font-size: 11.5px;
+  font-weight: 400;
+  text-shadow: none;
+}
+
+/* ---- bulk action bar ---- */
+.bulkbar {
+  height: 44px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--acc2) 7%, transparent);
+  animation: bulkin 0.16s ease-out;
+}
+@keyframes bulkin {
+  from {
+    transform: translateY(-4px);
+  }
+}
+.bulk-count {
+  color: var(--acc2);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.dark .bulk-count {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--acc2) 50%, transparent);
+}
+.bulk-count b {
+  font-weight: 700;
+}
+.bulk-clear {
+  color: var(--dim);
+  font-size: 11.5px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  padding: 3px 7px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.bulk-clear:hover {
+  color: var(--foreground);
+  border-color: var(--line);
+}
+.bulk-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.bbtn {
+  border: 1px solid color-mix(in srgb, var(--acc2) 28%, transparent);
+  background: color-mix(in srgb, var(--acc2) 6%, transparent);
+  color: var(--acc2);
+  font: inherit;
+  font-size: 11.5px;
+  padding: 6px 12px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.bbtn:hover {
+  background: color-mix(in srgb, var(--acc2) 14%, transparent);
+}
+.bbtn.danger {
+  border-color: color-mix(in srgb, var(--destructive) 30%, transparent);
+  background: color-mix(in srgb, var(--destructive) 5%, transparent);
+  color: var(--destructive);
+}
+.bbtn.danger:hover {
+  background: color-mix(in srgb, var(--destructive) 13%, transparent);
+}
+
+/* ---- detail: activity graph + timeframe selector ---- */
+.rd-activity {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 11px 13px 9px;
+  margin-bottom: 16px;
+  background: color-mix(in srgb, var(--primary) 2.5%, transparent);
+  color: var(--primary);
+}
+.rd-act-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+.rd-act-rates {
+  display: flex;
+  gap: 16px;
+  font-size: 12.5px;
+}
+.rd-act-rates small {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-left: 1px;
+}
+.rd-act-rates .d {
+  color: var(--acc);
+}
+.rd-act-rates .u {
+  color: var(--acc2);
+}
+.rd-frames {
+  display: flex;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px;
+}
+.rd-frame {
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  padding: 4px 9px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.rd-frame:hover {
+  color: var(--dim2);
+}
+.rd-frame.on {
+  color: var(--acc);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+/* ---- detail: pieces legend ---- */
+.rd-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 11px;
+  color: var(--dim2);
+}
+.rd-legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rd-legend i {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* ---- detail: files ---- */
+.rd-fbar {
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  overflow: hidden;
+}
+.rd-fbar > i {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  box-shadow: 0 0 6px var(--primary);
+}
+
+/* ---- detail: peers flags ---- */
+.rd-flags {
+  color: var(--acc2);
+  letter-spacing: 0.08em;
+}
+
+/* ---- detail: trackers ---- */
+.rd-trk {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rd-trkrow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px;
+  font-size: 12px;
+  border-radius: 2px;
+}
+.rd-trkrow:hover {
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+}
+.rd-trkname {
+  color: var(--foreground);
+  min-width: 130px;
+}
+
+/* ---- GRID card view ----
+   NOTE: must NOT be named `.grid` — that collides with Tailwind's `grid`
+   (display:grid) utility used by the table header, every torrent row, and the
+   detail file/peer rows, whose layout would then inherit this flex:1 + padding. */
+.cardgrid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 18px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 13px;
+  align-content: start;
+  grid-auto-rows: min-content;
+}
+.gcard {
+  align-self: start;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 13px 13px 12px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 3%, transparent), transparent);
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  transition:
+    border-color 0.14s,
+    background 0.14s,
+    box-shadow 0.14s;
+}
+.gcard:hover {
+  border-color: color-mix(in srgb, var(--primary) 32%, transparent);
+  background: color-mix(in srgb, var(--primary) 5%, transparent);
+}
+.gcard.sel {
+  border-color: color-mix(in srgb, var(--acc2) 42%, transparent);
+  background: color-mix(in srgb, var(--acc2) 4.5%, transparent);
+}
+.gcard.cursor {
+  box-shadow:
+    0 0 0 1px var(--acc2),
+    0 0 22px color-mix(in srgb, var(--acc2) 12%, transparent);
+}
+.gcard.sweep {
+  box-shadow: inset 0 0 36px color-mix(in srgb, var(--acc2) 20%, transparent);
+}
+.gc-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.gc-mk {
+  font-size: 12px;
+  flex: none;
+  width: 14px;
+  text-align: center;
+  margin-top: 1px;
+}
+.gc-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--foreground);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.gc-chk {
+  position: relative;
+  flex: none;
+  margin-top: 1px;
+}
+.gc-piece {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  opacity: 0.9;
+}
+.gc-prog {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.gc-prog .seg {
+  height: 10px;
+}
+.gc-pct {
+  font-size: 11.5px;
+  color: var(--acc);
+  width: 34px;
+  text-align: right;
+  flex: none;
+}
+.gc-graph {
+  height: 30px;
+  color: var(--acc);
+  margin: -1px 0 1px;
+  border-bottom: 1px solid color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.gc-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--dim2);
+  flex-wrap: wrap;
+}
+.gc-meta .d {
+  color: var(--acc);
+}
+.gc-meta .u {
+  color: var(--acc2);
+}
+.gc-meta .sz {
+  color: var(--dim2);
+}
+.gc-meta .rt {
+  color: var(--acc2);
+  margin-left: auto;
+}
+.gc-stat {
+  position: absolute;
+  top: 0;
+  right: 0;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 3px 7px;
+  border-bottom-left-radius: 4px;
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ---- INSIGHT view ---- */
+.insight {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 26px 30px;
+}
+.ip {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  background: color-mix(in srgb, var(--primary) 1.5%, transparent);
+  position: relative;
+}
+.ip-label {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 14px;
+}
+.ip-traf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.ip-rates {
+  display: flex;
+  gap: 18px;
+  font-size: 14px;
+}
+.ip-rates small {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-left: 1px;
+}
+.ip-rates .d {
+  color: var(--acc);
+}
+.dark .ip-rates .d {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--primary) 45%, transparent);
+}
+.ip-rates .u {
+  color: var(--acc2);
+}
+.dark .ip-rates .u {
+  text-shadow: 0 0 10px color-mix(in srgb, var(--acc2) 45%, transparent);
+}
+.ip-plot {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  gap: 10px;
+}
+.ip-yaxis {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-end;
+  font-size: 10px;
+  color: var(--dim);
+  height: 300px;
+  padding: 1px 0;
+}
+.ip-graphbox {
+  position: relative;
+  height: 300px;
+  color: var(--acc2);
+}
+.ip-xaxis {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--dim);
+  margin-top: 8px;
+  padding-left: 72px;
+}
+.ip-disk-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  color: var(--dim2);
+  margin-bottom: 12px;
+}
+.ip-disk-head .free {
+  color: var(--dim);
+  font-size: 12px;
+}
+.ip-bar {
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  overflow: hidden;
+}
+.ip-bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--acc2), var(--acc));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--acc2) 45%, transparent);
+}
+.ip-search {
+  font-size: 13px;
+  color: var(--dim);
+}
+.ip-foot {
+  text-align: center;
+  font-size: 11px;
+  color: var(--dim);
+  padding: 6px 0 4px;
+}
+.ip-foot a {
+  color: var(--dim2);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--dim2) 30%, transparent);
+}
+.ip-foot a:hover {
+  color: var(--acc);
+}
+
+/* ---- modal shell ---- */
+.modal-bd {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(4, 6, 11, 0.74);
+  backdrop-filter: blur(3px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8vh 20px 20px;
+  animation: fade 0.16s ease-out;
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+.modal {
+  width: 580px;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent);
+  border-radius: 5px;
+  background: var(--card);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.65);
+  animation: rise 0.2s cubic-bezier(0.2, 0.7, 0.3, 1);
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+.modal::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(600px 240px at 80% -10%, color-mix(in srgb, var(--primary) 10%, transparent), transparent 60%);
+}
+@keyframes rise {
+  from {
+    transform: translateY(14px) scale(0.99);
+  }
+}
+.modal-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.modal-title {
+  color: var(--acc);
+  letter-spacing: 0.08em;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.modal-title .sd {
+  color: var(--acc2);
+  flex: none;
+}
+.modal-x {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--dim);
+  width: 26px;
+  height: 26px;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.modal-x:hover {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+}
+.modal-body {
+  padding: 16px;
+  overflow-y: auto;
+}
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+.modal-foot .sp {
+  margin-left: auto;
+}
+
+/* ---- add modal internals ---- */
+.add-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 15px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px;
+}
+.add-tab {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  padding: 8px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.add-tab:hover {
+  color: var(--dim2);
+}
+.add-tab.on {
+  color: var(--acc);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+.fld {
+  margin-bottom: 14px;
+}
+.fld-l {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 7px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.ta,
+.inp {
+  width: 100%;
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 10px 12px;
+  outline: none;
+  resize: none;
+  transition:
+    border-color 0.14s,
+    box-shadow 0.14s;
+}
+.ta:focus,
+.inp:focus {
+  border-color: color-mix(in srgb, var(--primary) 50%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.ta {
+  min-height: 96px;
+  line-height: 1.5;
+}
+.ta::placeholder,
+.inp::placeholder {
+  color: var(--dim);
+}
+.drop {
+  border: 1px dashed color-mix(in srgb, var(--primary) 34%, transparent);
+  border-radius: 4px;
+  padding: 30px 18px;
+  text-align: center;
+  background: color-mix(in srgb, var(--primary) 2.5%, transparent);
+  cursor: pointer;
+  transition: 0.14s;
+}
+.drop:hover,
+.drop.over {
+  border-color: color-mix(in srgb, var(--primary) 60%, transparent);
+  background: color-mix(in srgb, var(--primary) 7%, transparent);
+}
+.drop-ico {
+  font-size: 26px;
+  color: var(--acc);
+  margin-bottom: 9px;
+}
+.dark .drop-ico {
+  text-shadow: 0 0 14px color-mix(in srgb, var(--primary) 50%, transparent);
+}
+.drop-t {
+  color: var(--dim2);
+  font-size: 12.5px;
+  margin-bottom: 4px;
+}
+.drop-h {
+  color: var(--dim);
+  font-size: 11px;
+}
+.filechip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--acc2) 5%, transparent);
+  font-size: 12px;
+  margin-top: 9px;
+}
+.filechip .fc-ico {
+  color: var(--acc2);
+}
+.filechip .fc-x {
+  margin-left: auto;
+  color: var(--dim);
+  cursor: pointer;
+}
+.filechip .fc-x:hover {
+  color: var(--destructive);
+}
+.add-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.opt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.opt-row .inp {
+  flex: 1;
+}
+.seltag {
+  background: color-mix(in srgb, var(--primary) 4%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  outline: none;
+  cursor: pointer;
+}
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--dim2);
+  user-select: none;
+}
+.tg {
+  width: 34px;
+  height: 18px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  border: 1px solid var(--line);
+  position: relative;
+  transition: 0.15s;
+  flex: none;
+}
+.tg i {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--dim);
+  transition: 0.15s;
+}
+.toggle.on .tg {
+  background: color-mix(in srgb, var(--acc2) 22%, transparent);
+  border-color: color-mix(in srgb, var(--acc2) 40%, transparent);
+}
+.toggle.on .tg i {
+  left: 17px;
+  background: var(--acc2);
+  box-shadow: 0 0 8px var(--acc2);
+}
+.add-foot-hint {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+/* ---- help / shortcuts overlay ---- */
+.kbd-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 28px;
+}
+.kbd-sec {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--acc2);
+  grid-column: 1 / -1;
+  margin-top: 6px;
+}
+.kbd-sec:first-child {
+  margin-top: 0;
+}
+.kbd-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 12px;
+  color: var(--dim2);
+}
+.kbd-keys {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  min-width: 60px;
+}
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 21px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--acc);
+  background: color-mix(in srgb, var(--primary) 6%, transparent);
+}
+.kbd-hint {
+  position: fixed;
+  bottom: 14px;
+  right: 18px;
+  z-index: 40;
+  font-size: 11px;
+  color: var(--dim);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  pointer-events: none;
 }

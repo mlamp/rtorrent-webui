@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { ChevronUp, ChevronDown } from '@lucide/svelte'
   import TorrentRow from './TorrentRow.svelte'
   import RowDetail from '../detail/RowDetail.svelte'
   import { view, type ColumnKey } from '$lib/stores/view.svelte'
@@ -10,9 +9,9 @@
   let { rows }: { rows: TRow[] } = $props()
 
   // shared grid template: select · name · progress · rate · size · ratio · eta
-  const COLS = '24px minmax(0,1fr) 200px 92px 64px 52px 60px'
-  const ROW_H = 40
-  const DETAIL_H = 340 // matches RowDetail's fixed height — keeps windowing exact
+  const COLS = '26px minmax(0,1fr) 150px 86px 58px 50px 50px'
+  const ROW_H = 46
+  const DETAIL_H = 472 // matches RowDetail's fixed height — keeps windowing exact
   const OVERSCAN = 6
 
   let scrollTop = $state(0)
@@ -45,43 +44,38 @@
   const padBottom = $derived(Math.max(0, totalH - padTop - renderedH))
 
   const allSelected = $derived(rows.length > 0 && rows.every((t) => selection.has(t.hash)))
+  const someSelected = $derived(selection.size > 0 && !allSelected)
   function toggleAll() {
     const on = !allSelected
     for (const t of rows) selection.set(t.hash, on)
   }
 
-  const headers: { key: ColumnKey | null; label: string; right?: boolean }[] = [
-    { key: null, label: '' },
+  const headers: { key: ColumnKey; label: string; right?: boolean }[] = [
     { key: 'name', label: 'NAME' },
     { key: 'done', label: 'PROGRESS' },
-    { key: 'downRate', label: 'RATE' },
+    { key: 'rate', label: 'RATE' },
     { key: 'size', label: 'SIZE', right: true },
     { key: 'ratio', label: 'RATIO', right: true },
-    { key: null, label: 'ETA', right: true },
+    { key: 'eta', label: 'ETA', right: true },
   ]
 </script>
 
 <div class="flex h-full flex-col">
   <div
-    class="grid shrink-0 border-b border-line text-[10.5px] uppercase tracking-[0.13em] text-dim"
-    style="grid-template-columns:{COLS}"
+    class="grid shrink-0 items-center border-b border-line px-[18px] py-[9px] text-[10.5px] uppercase tracking-[0.13em] text-dim"
+    style="grid-template-columns:{COLS}; gap:13px"
   >
-    {#each headers as h, i (i)}
-      {#if i === 0}
-        <div class="grid place-items-center">
-          <input type="checkbox" class="accent-[var(--primary)]" checked={allSelected} onchange={toggleAll} />
-        </div>
-      {:else}
-        <button
-          class="flex items-center gap-1 px-3 py-2.5 {h.right ? 'justify-end' : ''} {h.key ? 'hover:text-foreground' : 'cursor-default'}"
-          onclick={() => h.key && view.toggleSort(h.key)}
-        >
-          {h.label}
-          {#if h.key && view.sortKey === h.key}
-            {#if view.sortDir === 1}<ChevronUp class="size-3" />{:else}<ChevronDown class="size-3" />{/if}
-          {/if}
-        </button>
-      {/if}
+    <div class="selcell" onclick={toggleAll} role="presentation">
+      <span class="chk" class:on={allSelected} class:part={someSelected}>{someSelected && !allSelected ? '–' : '✓'}</span>
+    </div>
+    {#each headers as h (h.key)}
+      <button
+        class="sortable flex items-center gap-[5px] {h.right ? 'justify-end' : ''} {view.sortKey === h.key ? 'act text-acc' : 'hover:text-dim2'}"
+        onclick={() => view.toggleSort(h.key)}
+      >
+        {h.label}
+        <span class="sarrow">{view.sortKey === h.key ? (view.sortDir === 1 ? '▲' : '▼') : '▲▼'}</span>
+      </button>
     {/each}
   </div>
 

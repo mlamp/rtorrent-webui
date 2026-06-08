@@ -32,15 +32,16 @@ export const api = {
   setPriority: (h: string, priority: number) =>
     req('PUT', `/api/torrents/${h}/priority`, jsonBody({ priority })),
   setThrottle: (down: number, up: number) => req('PUT', '/api/throttle', jsonBody({ down, up })),
-  addMagnet: (magnet: string, label?: string, start?: boolean) =>
-    req('POST', '/api/torrents', jsonBody({ magnet, label, start })),
-  addURL: (url: string, label?: string, start?: boolean) =>
-    req('POST', '/api/torrents', jsonBody({ url, label, start })),
-  addFile: (file: File, label?: string, start?: boolean) => {
+  addMagnet: (magnet: string, label?: string, start?: boolean, dir?: string) =>
+    req('POST', '/api/torrents', jsonBody({ magnet, label, start, directory: dir || undefined })),
+  addURL: (url: string, label?: string, start?: boolean, dir?: string) =>
+    req('POST', '/api/torrents', jsonBody({ url, label, start, directory: dir || undefined })),
+  addFile: (file: File, label?: string, start?: boolean, dir?: string) => {
     const fd = new FormData()
     fd.append('torrent', file)
     if (label) fd.append('label', label)
     if (start) fd.append('start', 'true')
+    if (dir) fd.append('directory', dir)
     return req('POST', '/api/torrents', { body: fd })
   },
   getFiles: (h: string) => req('GET', `/api/torrents/${h}/files`),

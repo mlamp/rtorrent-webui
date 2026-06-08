@@ -1,13 +1,17 @@
 import type { Status } from '$lib/types/torrent'
+import { trackerHost } from '$lib/format'
 import type { TorrentRow } from './torrents.svelte'
 
 export type StatusFilter = 'all' | 'active' | 'downloading' | 'seeding' | 'stopped' | 'error'
+export type ViewMode = 'list' | 'grid' | 'insight'
 export type ColumnKey =
   | 'name'
   | 'size'
   | 'done'
   | 'downRate'
   | 'upRate'
+  | 'rate'
+  | 'eta'
   | 'ratio'
   | 'status'
   | 'label'
@@ -16,16 +20,25 @@ export type ColumnKey =
 class ViewState {
   status = $state<StatusFilter>('all')
   label = $state<string | null>(null)
+  tracker = $state<string | null>(null)
   search = $state('')
   sortKey = $state<ColumnKey>('name')
   sortDir = $state<1 | -1>(1)
+  /** which primary view is showing (list cards/grid cards/insight). */
+  mode = $state<ViewMode>('list')
+  /** keyboard-navigation cursor (a torrent hash), independent of selection. */
+  cursor = $state<string | null>(null)
 
   toggleSort(key: ColumnKey) {
     if (this.sortKey === key) this.sortDir = this.sortDir === 1 ? -1 : 1
     else {
       this.sortKey = key
-      this.sortDir = 1
+      // name reads best ascending; everything else (rates, size, ratio) descending
+      this.sortDir = key === 'name' ? 1 : -1
     }
+  }
+  cycleMode() {
+    this.mode = this.mode === 'list' ? 'grid' : this.mode === 'grid' ? 'insight' : 'list'
   }
 }
 
@@ -48,6 +61,7 @@ export function matches(t: TorrentRow, v: ViewState): boolean {
     if (!isActive(t)) return false
   } else if (!statusMatch[v.status](t.status)) return false
   if (v.label !== null && t.label !== v.label) return false
+  if (v.tracker !== null && trackerHost(t.tracker) !== v.tracker) return false
   if (v.search && !t.name.toLowerCase().includes(v.search.toLowerCase())) return false
   return true
 }
@@ -70,6 +84,15 @@ export function compare(a: TorrentRow, b: TorrentRow, key: ColumnKey, dir: 1 | -
     case 'upRate':
       r = a.upRate - b.upRate
       break
+    case 'rate':
+      r = a.downRate + a.upRate - (b.downRate + b.upRate)
+      break
+    case 'eta': {
+      const av = isFinite(a.etaSeconds) ? a.etaSeconds : Number.MAX_SAFE_INTEGER
+      const bv = isFinite(b.etaSeconds) ? b.etaSeconds : Number.MAX_SAFE_INTEGER
+      r = av - bv
+      break
+    }
     case 'ratio':
       r = a.ratio - b.ratio
       break

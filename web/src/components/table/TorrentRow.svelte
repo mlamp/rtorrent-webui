@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import type { Status } from '$lib/types/torrent'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
+  import { view } from '$lib/stores/view.svelte'
   import { short, ratio, eta } from '$lib/format'
 
   let { t, cols }: { t: TorrentRow; cols: string } = $props()
@@ -30,35 +32,62 @@
   const isDl = $derived(t.status === 'downloading')
   const open = $derived(detail.activeHash === t.hash)
   const selected = $derived(selection.has(t.hash))
+  const cursor = $derived(view.cursor === t.hash)
+
+  // rate-cell morph: how many directions are moving right now
+  const dirs = $derived((t.downRate > 0 ? 1 : 0) + (t.upRate > 0 ? 1 : 0))
+
+  // flash newly-filled segments for ~620ms when progress advances
+  let lastFilled = untrack(() => filled)
+  let flashFrom = $state(-1)
+  let flashTo = $state(-1)
+  let flashTimer: ReturnType<typeof setTimeout>
+  $effect(() => {
+    const f = filled
+    if (f > lastFilled) {
+      flashFrom = lastFilled
+      flashTo = f
+      clearTimeout(flashTimer)
+      flashTimer = setTimeout(() => {
+        flashFrom = -1
+        flashTo = -1
+      }, 620)
+    }
+    lastFilled = f
+    return () => clearTimeout(flashTimer)
+  })
 </script>
 
 <div
   data-torrent={t.hash}
-  class="trow group relative grid cursor-pointer items-center overflow-hidden px-3"
+  class="trow group relative grid cursor-pointer items-center overflow-hidden px-[18px]"
   class:open
   class:selected
-  style="grid-template-columns:{cols}; height:40px; --seg-c:{SEGVAR[t.status]}"
+  class:cursor
+  class:sweep={t.sweeping}
+  style="grid-template-columns:{cols}; height:46px; gap:13px; --seg-c:{SEGVAR[t.status]}"
   onclick={() => detail.open(t.hash)}
+  role="button"
+  tabindex="-1"
+  onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && detail.open(t.hash)}
 >
   {#if t.sweeping}<span class="rowsweep"></span>{/if}
 
   <div
-    class="pr-1 transition-opacity group-hover:opacity-100 {selected ? 'opacity-100' : 'opacity-40'}"
-    onclick={(e) => e.stopPropagation()}
+    class="selcell"
+    onclick={(e) => {
+      e.stopPropagation()
+      selection.toggle(t.hash)
+    }}
     role="presentation"
   >
-    <input
-      type="checkbox"
-      class="align-middle accent-[var(--primary)]"
-      checked={selected}
-      onchange={(e) => selection.set(t.hash, e.currentTarget.checked)}
-    />
+    <span class="chk" class:on={selected}>✓</span>
   </div>
 
   <div class="flex min-w-0 items-center gap-2">
     <span class="w-3 shrink-0 text-center text-[11px]" style="color:{SEGVAR[t.status]}">{MARK[t.status]}</span>
     <span class="shrink-0 text-[14px] leading-none transition-transform duration-200 {open ? 'rotate-90 text-primary' : 'text-dim'}">›</span>
-    <span class="truncate text-[12.5px] text-foreground">{t.name}</span>
+    <span class="truncate text-[12.5px]" style="color:var(--foreground)">{t.name}</span>
     {#if t.label}
       <span class="ml-1 shrink-0 rounded-sm border border-line px-1.5 text-[10px] text-acc2">{t.label}</span>
     {/if}
@@ -67,21 +96,28 @@
     {/if}
   </div>
 
-  <div class="flex items-center gap-2">
+  <div class="flex items-center gap-[9px]">
     <div class="seg">
       {#each Array(SEG) as _, i (i)}
-        <i class="sg {i < filled ? 'on' : ''} {isDl && i === filled && t.done < 1 ? 'lead' : ''}"></i>
+        <i
+          class="sg"
+          class:on={i < filled}
+          class:lead={isDl && i === filled && t.done < 1}
+          class:flash={i >= flashFrom && i < flashTo}
+        ></i>
       {/each}
     </div>
-    <span class="w-8 shrink-0 text-right text-[11px] text-primary">{Math.round(t.done * 100)}%</span>
+    <span class="w-8 shrink-0 text-right text-[11.5px] text-acc">{Math.round(t.done * 100)}%</span>
   </div>
 
-  <div class="flex flex-col pl-3 text-[12px] leading-[1.3]">
-    <span class="tabular-nums text-status-download {t.downRate > 0 ? 'txt-glow' : 'text-dim'}">↓{t.downRate > 0 ? short(t.downRate) : '·'}</span>
-    <span class="tabular-nums text-status-seed {t.upRate > 0 ? 'txt-glow' : 'text-dim'}">↑{t.upRate > 0 ? short(t.upRate) : '·'}</span>
+  <!-- RATE: morphs between two compact lines / one enlarged solo line / muted idle -->
+  <div class="rate rate-{dirs}">
+    <span class="ln d {t.downRate > 0 ? 'on' : 'off'} {dirs === 1 && t.downRate > 0 ? 'solo' : ''}">↓{short(t.downRate)}</span>
+    <span class="ln u {t.upRate > 0 ? 'on' : 'off'} {dirs === 1 && t.upRate > 0 ? 'solo' : ''}">↑{short(t.upRate)}</span>
+    <span class="ln idle {dirs === 0 ? 'on solo' : 'off'}">idle</span>
   </div>
 
-  <div class="text-right text-[12px] text-dim2">{short(t.size)}<span class="text-dim">B</span></div>
-  <div class="text-right text-[12px] text-acc2 txt-glow">{ratio(t.ratio)}</div>
-  <div class="text-right text-[12px] text-dim">{isDl ? eta(t.etaSeconds) : '·'}</div>
+  <div class="text-right text-[12.5px] text-foreground/70">{short(t.size)}<span class="ml-px text-[10px] text-dim">B</span></div>
+  <div class="text-right text-[12px] text-acc2">{ratio(t.ratio)}</div>
+  <div class="text-right text-[12px] text-dim">{eta(t.etaSeconds)}</div>
 </div>
