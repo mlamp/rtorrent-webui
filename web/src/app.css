@@ -1,0 +1,126 @@
+@import 'tailwindcss';
+
+/* Dark mode is driven by a `.dark` class on <html> (set by mode-watcher). */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Theme: Catppuccin — Latte (light) / Mocha (dark) — mapped onto the
+ * shadcn-svelte token set so every component + utility reads cohesively.
+ * Accent = Mauve. Tuned for dense, highly readable data tables.
+ */
+:root {
+  --radius: 0.5rem;
+
+  --background: #e6e9ef; /* latte mantle */
+  --foreground: #4c4f69; /* latte text */
+  --card: #eff1f5; /* latte base */
+  --card-foreground: #4c4f69;
+  --popover: #eff1f5;
+  --popover-foreground: #4c4f69;
+  --primary: #8839ef; /* latte mauve */
+  --primary-foreground: #eff1f5;
+  --secondary: #ccd0da; /* latte surface0 */
+  --secondary-foreground: #4c4f69;
+  --muted: #dce0e8; /* latte crust */
+  --muted-foreground: #6c6f85; /* latte subtext0 */
+  --accent: #ccd0da;
+  --accent-foreground: #4c4f69;
+  --destructive: #d20f39; /* latte red */
+  --destructive-foreground: #eff1f5;
+  --border: #ccd0da; /* latte surface0 */
+  --input: #bcc0cc; /* latte surface1 */
+  --ring: #8839ef;
+
+  /* torrent status accents */
+  --status-download: #1e66f5; /* blue */
+  --status-seed: #40a02b; /* green */
+  --status-stopped: #9ca0b0; /* overlay0 */
+  --status-error: #d20f39; /* red */
+  --status-check: #df8e1d; /* yellow */
+}
+
+.dark {
+  --background: #181825; /* mocha mantle */
+  --foreground: #cdd6f4; /* mocha text */
+  --card: #1e1e2e; /* mocha base */
+  --card-foreground: #cdd6f4;
+  --popover: #1e1e2e;
+  --popover-foreground: #cdd6f4;
+  --primary: #cba6f7; /* mocha mauve */
+  --primary-foreground: #11111b;
+  --secondary: #313244; /* mocha surface0 */
+  --secondary-foreground: #cdd6f4;
+  --muted: #11111b; /* mocha crust */
+  --muted-foreground: #a6adc8; /* mocha subtext0 */
+  --accent: #313244;
+  --accent-foreground: #cdd6f4;
+  --destructive: #f38ba8; /* mocha red */
+  --destructive-foreground: #11111b;
+  --border: #313244; /* mocha surface0 */
+  --input: #45475a; /* mocha surface1 */
+  --ring: #cba6f7;
+
+  --status-download: #89b4fa;
+  --status-seed: #a6e3a1;
+  --status-stopped: #6c7086;
+  --status-error: #f38ba8;
+  --status-check: #f9e2af;
+}
+
+/* Expose the tokens as Tailwind v4 theme colors → bg-background, text-muted-foreground, etc. */
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-status-download: var(--status-download);
+  --color-status-seed: var(--status-seed);
+  --color-status-stopped: var(--status-stopped);
+  --color-status-error: var(--status-error);
+  --color-status-check: var(--status-check);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'Fira Code', Menlo, Consolas, monospace;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* thin, themed scrollbars for the dense table */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--input) transparent;
+}

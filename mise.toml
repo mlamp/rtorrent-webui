@@ -1,0 +1,37 @@
+# Pinned toolchain for rtorrent-webui — dev == CI == Docker.
+# Bump a single line here to upgrade everywhere.
+[tools]
+go = "1.26.4"
+node = "24"        # current Active LTS (Node 26 is current/pre-LTS until Oct 2026)
+pnpm = "11"
+
+[env]
+# Keep the Go build CGO-free so cross-compiled static binaries stay portable.
+CGO_ENABLED = "0"
+
+[tasks.web-install]
+dir = "web"
+run = "pnpm install --frozen-lockfile || pnpm install"
+
+[tasks.web-build]
+dir = "web"
+run = "pnpm run build"
+
+[tasks.web-dev]
+dir = "web"
+run = "pnpm run dev"
+
+[tasks.build]
+depends = ["web-build"]
+run = "go build -trimpath -ldflags '-s -w' -o bin/rtorrent-webui ./cmd/rtorrent-webui"
+
+[tasks.run]
+run = "go run ./cmd/rtorrent-webui -config config.example.toml"
+
+[tasks.test]
+# explicit paths so `go` never walks web/node_modules
+run = "go test ./cmd/... ./internal/..."
+
+[tasks.screenshot]
+dir = "web"
+run = "pnpm exec playwright test e2e/screenshot.spec.ts"

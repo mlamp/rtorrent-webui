@@ -1,0 +1,19 @@
+# Go build output
+/bin/
+*.test
+*.out
+
+# Node / Vite / frontend build artifacts
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+web/e2e/.results/
+web/e2e/screenshots/
+web/.svelte-kit/
+web/*.tsbuildinfo
+
+# tooling / local
+.DS_Store
+*.log
+/data/
