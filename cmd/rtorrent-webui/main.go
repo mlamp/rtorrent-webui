@@ -8,9 +8,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mlamp/rtorrent-webui/internal/api"
+	"github.com/mlamp/rtorrent-webui/internal/insight/geoip"
+	"github.com/mlamp/rtorrent-webui/internal/insight/history"
+	"github.com/mlamp/rtorrent-webui/internal/insight/search"
 	"github.com/mlamp/rtorrent-webui/internal/model"
 	"github.com/mlamp/rtorrent-webui/internal/poll"
 	"github.com/mlamp/rtorrent-webui/internal/rpc"
@@ -24,6 +28,10 @@ func main() {
 	interval := flag.Duration("interval", time.Second, "poll interval")
 	view := flag.String("view", "main", "rtorrent view to poll")
 	mock := flag.Int("mock", 0, "serve N synthetic torrents instead of rtorrent (load testing)")
+	geoipDB := flag.String("geoip-db", "", "MaxMind/DB-IP mmdb path for peer country flags")
+	historyDB := flag.String("history-db", "", "SQLite history db path (empty disables history)")
+	historyRet := flag.Duration("history-retention", 24*time.Hour, "history retention window")
+	diskDirs := flag.String("disk-dirs", "", "comma-separated dirs for /api/diskspace")
 	_ = flag.String("config", "", "path to TOML config (wired in later milestones)")
 	flag.Parse()
 
@@ -46,6 +54,28 @@ func main() {
 	hub.OnActivity(poller.Start, poller.Stop)
 
 	srv := api.New(hub, rpcClient, *view)
+	srv.SetSearch(search.NewRegistry()) // seam only in v1
+
+	if *diskDirs != "" {
+		srv.SetDirs(strings.Split(*diskDirs, ","))
+	}
+	if *geoipDB != "" {
+		if g, err := geoip.New(*geoipDB); err == nil {
+			srv.SetGeo(g)
+			logger.Printf("geoip: %s", *geoipDB)
+		} else {
+			logger.Printf("geoip disabled: %v", err)
+		}
+	}
+	if *historyDB != "" {
+		if h, err := history.New(*historyDB, *historyRet); err == nil {
+			srv.SetHistory(h)
+			poller.SetSink(h.Sample)
+			logger.Printf("history: %s (retention %s)", *historyDB, *historyRet)
+		} else {
+			logger.Printf("history disabled: %v", err)
+		}
+	}
 
 	logger.Printf("rtorrent-webui listening on %s (rtorrent %s, poll %s)", *addr, *rtAddr, *interval)
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {

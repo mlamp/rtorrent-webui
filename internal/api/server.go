@@ -10,17 +10,22 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mlamp/rtorrent-webui/internal/insight/history"
+	"github.com/mlamp/rtorrent-webui/internal/insight/search"
 	"github.com/mlamp/rtorrent-webui/internal/rpc"
 	"github.com/mlamp/rtorrent-webui/internal/sse"
 	"github.com/mlamp/rtorrent-webui/web"
 )
 
 type Server struct {
-	hub  *sse.Hub
-	rpc  *rpc.Client
-	view string
-	geo  GeoLookup
-	mux  *http.ServeMux
+	hub     *sse.Hub
+	rpc     *rpc.Client
+	view    string
+	geo     GeoLookup
+	dirs    []string
+	history *history.Store
+	search  *search.Registry
+	mux     *http.ServeMux
 }
 
 func New(hub *sse.Hub, r *rpc.Client, view string) *Server {
@@ -42,6 +47,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/stats", s.handleStats)
 	s.actionRoutes()
 	s.detailRoutes()
+	s.insightRoutes()
 	s.mux.Handle("/", web.SPAHandler())
 }
 

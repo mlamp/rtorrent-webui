@@ -5,7 +5,7 @@
   import {
     Sun, Moon, Plus, ArrowDown, ArrowUp, Circle, Search,
     Layers, Download, CheckCircle2, PauseCircle, AlertTriangle,
-    Play, Square, Trash2, Gauge, X,
+    Play, Square, Trash2, Gauge, X, Activity, List,
   } from '@lucide/svelte'
   import { torrents } from '$lib/stores/torrents.svelte'
   import { globals } from '$lib/stores/globals.svelte'
@@ -18,9 +18,11 @@
   import AddTorrentDialog from './components/toolbar/AddTorrentDialog.svelte'
   import ThrottleDialog from './components/toolbar/ThrottleDialog.svelte'
   import DetailPanel from './components/detail/DetailPanel.svelte'
+  import InsightView from './components/insight/InsightView.svelte'
 
   let addOpen = $state(false)
   let throttleOpen = $state(false)
+  let mainView = $state<'torrents' | 'insight'>('torrents')
 
   function startSel() {
     bulk(selection.list(), api.start, 'Started')
@@ -95,6 +97,17 @@
       <span>rtorrent<span class="text-primary">-webui</span></span>
     </div>
 
+    <nav class="ml-2 flex gap-1 rounded-md bg-secondary p-1">
+      <button
+        onclick={() => (mainView = 'torrents')}
+        class="flex items-center gap-1.5 rounded px-2.5 py-1 text-sm transition {mainView === 'torrents' ? 'bg-card font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+      ><List class="size-4" />Torrents</button>
+      <button
+        onclick={() => (mainView = 'insight')}
+        class="flex items-center gap-1.5 rounded px-2.5 py-1 text-sm transition {mainView === 'insight' ? 'bg-card font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+      ><Activity class="size-4" />Insight</button>
+    </nav>
+
     <button
       onclick={() => (addOpen = true)}
       class="ml-2 inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition hover:opacity-90"
@@ -152,6 +165,7 @@
     </div>
   </header>
 
+  {#if mainView === 'torrents'}
   <div class="flex min-h-0 flex-1">
     <aside class="hidden w-56 shrink-0 overflow-y-auto border-r bg-card/50 p-3 md:block">
       <p class="px-2 pb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</p>
@@ -200,6 +214,9 @@
   </div>
 
   <DetailPanel />
+  {:else}
+    <div class="min-h-0 flex-1"><InsightView /></div>
+  {/if}
 
   <footer class="flex h-7 shrink-0 items-center justify-between border-t bg-card px-4 text-xs text-muted-foreground">
     <span>{globals.torrentCount} torrents · {counts.seeding} seeding · {counts.downloading} downloading</span>

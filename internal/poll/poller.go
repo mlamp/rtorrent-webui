@@ -18,11 +18,15 @@ import (
 // Source produces the current torrent list + globals for one tick.
 type Source func(ctx context.Context) ([]model.Torrent, model.Globals, error)
 
+// Sink receives each tick's data (e.g. the history sampler).
+type Sink func(torrents []model.Torrent, g model.Globals, ts int64)
+
 type Poller struct {
 	src      Source
 	hub      *sse.Hub
 	interval time.Duration
 	log      *log.Logger
+	sink     Sink
 
 	mu      sync.Mutex
 	running bool
@@ -38,6 +42,9 @@ func New(src Source, hub *sse.Hub, interval time.Duration, logger *log.Logger) *
 	}
 	return &Poller{src: src, hub: hub, interval: interval, log: logger}
 }
+
+// SetSink installs a per-tick data sink (call before Start).
+func (p *Poller) SetSink(s Sink) { p.sink = s }
 
 // Start begins the loop (idempotent). Called when the first SSE client connects.
 func (p *Poller) Start() {
@@ -91,6 +98,10 @@ func (p *Poller) tick() {
 	p.seq++
 	ts := time.Now().Unix()
 	isFirst := p.prev == nil
+
+	if p.sink != nil {
+		p.sink(torrents, globals, ts)
+	}
 
 	next := make(map[string]model.Torrent, len(torrents))
 	upserts := make([]any, 0)
