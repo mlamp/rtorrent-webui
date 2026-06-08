@@ -1,7 +1,7 @@
 import type { Status } from '$lib/types/torrent'
 import type { TorrentRow } from './torrents.svelte'
 
-export type StatusFilter = 'all' | 'downloading' | 'seeding' | 'stopped' | 'error'
+export type StatusFilter = 'all' | 'active' | 'downloading' | 'seeding' | 'stopped' | 'error'
 export type ColumnKey =
   | 'name'
   | 'size'
@@ -33,14 +33,20 @@ export const view = new ViewState()
 
 const statusMatch: Record<StatusFilter, (s: Status) => boolean> = {
   all: () => true,
+  active: () => true, // handled by rate, see matches()
   downloading: (s) => s === 'downloading',
   seeding: (s) => s === 'seeding',
   stopped: (s) => s === 'stopped' || s === 'paused',
   error: (s) => s === 'error',
 }
 
+/** ACTIVE = anything currently transferring (down or up). */
+export const isActive = (t: TorrentRow): boolean => t.downRate > 0 || t.upRate > 0
+
 export function matches(t: TorrentRow, v: ViewState): boolean {
-  if (!statusMatch[v.status](t.status)) return false
+  if (v.status === 'active') {
+    if (!isActive(t)) return false
+  } else if (!statusMatch[v.status](t.status)) return false
   if (v.label !== null && t.label !== v.label) return false
   if (v.search && !t.name.toLowerCase().includes(v.search.toLowerCase())) return false
   return true

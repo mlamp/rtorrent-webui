@@ -247,9 +247,10 @@ body {
   }
 }
 
-/* faint CRT text-glow for high-emphasis values */
+/* faint CRT text-glow for high-emphasis values; low radius keeps small
+   tabular numbers (rates, ratio) crisp rather than fuzzy */
 .txt-glow {
-  text-shadow: 0 0 5px color-mix(in srgb, currentColor 55%, transparent);
+  text-shadow: 0 0 3px color-mix(in srgb, currentColor 40%, transparent);
 }
 @keyframes flash {
   0% {

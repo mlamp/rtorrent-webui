@@ -46,8 +46,9 @@
   })
 
   const counts = $derived.by(() => {
-    const c = { all: all.length, downloading: 0, seeding: 0, stopped: 0, error: 0 }
+    const c = { all: all.length, active: 0, downloading: 0, seeding: 0, stopped: 0, error: 0 }
     for (const t of all) {
+      if (t.downRate > 0 || t.upRate > 0) c.active++
       if (t.status === 'downloading') c.downloading++
       else if (t.status === 'seeding') c.seeding++
       else if (t.status === 'stopped' || t.status === 'paused') c.stopped++
@@ -64,6 +65,7 @@
 
   const statusFilters: { key: StatusFilter; label: string; mark: string; count: () => number }[] = [
     { key: 'all', label: 'ALL', mark: '✦', count: () => counts.all },
+    { key: 'active', label: 'ACTIVE', mark: '⇅', count: () => counts.active },
     { key: 'downloading', label: 'DOWNLOADING', mark: '▶', count: () => counts.downloading },
     { key: 'seeding', label: 'SEEDING', mark: '↑', count: () => counts.seeding },
     { key: 'stopped', label: 'STOPPED', mark: '■', count: () => counts.stopped },

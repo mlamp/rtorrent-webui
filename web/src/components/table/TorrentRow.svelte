@@ -43,7 +43,7 @@
   {#if t.sweeping}<span class="rowsweep"></span>{/if}
 
   <div
-    class="pr-1 transition-opacity group-hover:opacity-100 {selected ? 'opacity-100' : 'opacity-0'}"
+    class="pr-1 transition-opacity group-hover:opacity-100 {selected ? 'opacity-100' : 'opacity-40'}"
     onclick={(e) => e.stopPropagation()}
     role="presentation"
   >
@@ -76,9 +76,9 @@
     <span class="w-8 shrink-0 text-right text-[11px] text-primary">{Math.round(t.done * 100)}%</span>
   </div>
 
-  <div class="flex flex-col text-[11.5px] leading-[1.25]">
-    <span class="text-status-download {t.downRate > 0 ? 'txt-glow' : ''}">↓{t.downRate > 0 ? short(t.downRate) : '·'}</span>
-    <span class="text-status-seed {t.upRate > 0 ? 'txt-glow' : ''}">↑{t.upRate > 0 ? short(t.upRate) : '·'}</span>
+  <div class="flex flex-col pl-3 text-[12px] leading-[1.3]">
+    <span class="tabular-nums text-status-download {t.downRate > 0 ? 'txt-glow' : 'text-dim'}">↓{t.downRate > 0 ? short(t.downRate) : '·'}</span>
+    <span class="tabular-nums text-status-seed {t.upRate > 0 ? 'txt-glow' : 'text-dim'}">↑{t.upRate > 0 ? short(t.upRate) : '·'}</span>
   </div>
 
   <div class="text-right text-[12px] text-dim2">{short(t.size)}<span class="text-dim">B</span></div>
