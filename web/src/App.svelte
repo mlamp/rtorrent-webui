@@ -108,6 +108,10 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    // Let the browser/OS own every modifier combo (Cmd/Ctrl+R reload, Cmd+L, Ctrl+F,
+    // Cmd+A, …). All of the app's shortcuts are unmodified keys, so a held
+    // meta/ctrl/alt means "not ours".
+    if (e.metaKey || e.ctrlKey || e.altKey) return
     const tag = ((e.target as HTMLElement)?.tagName || '').toUpperCase()
     const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 
