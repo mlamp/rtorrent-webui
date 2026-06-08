@@ -13,7 +13,6 @@
   import TorrentTable from './components/table/TorrentTable.svelte'
   import AddTorrentDialog from './components/toolbar/AddTorrentDialog.svelte'
   import ThrottleDialog from './components/toolbar/ThrottleDialog.svelte'
-  import DetailPanel from './components/detail/DetailPanel.svelte'
   import InsightView from './components/insight/InsightView.svelte'
 
   let addOpen = $state(false)
@@ -177,8 +176,6 @@
 
       <main class="min-w-0 flex-1"><TorrentTable rows={visible} /></main>
     </div>
-
-    <DetailPanel />
   {:else}
     <div class="min-h-0 flex-1"><InsightView /></div>
   {/if}

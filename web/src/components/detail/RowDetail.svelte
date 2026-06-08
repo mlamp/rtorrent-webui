@@ -1,14 +1,18 @@
 <script lang="ts">
   import { detail, type DetailTab } from '$lib/stores/detail.svelte'
-  import { torrents } from '$lib/stores/torrents.svelte'
+  import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import { api } from '$lib/api/client'
   import { short, ratio } from '$lib/format'
   import PieceMap from './PieceMap.svelte'
   import CountryFlag from './CountryFlag.svelte'
 
-  const t = $derived(detail.activeHash ? torrents.map.get(detail.activeHash) : undefined)
-  const paused = $derived(t?.status === 'stopped' || t?.status === 'paused')
-  const pieceCount = $derived(t ? Math.min(420, Math.max(60, Math.round(t.size / (1 << 20)))) : 280)
+  // Fixed height so the list's virtualization math stays exact.
+  export const DETAIL_H = 340
+
+  let { t }: { t: TorrentRow } = $props()
+
+  const paused = $derived(t.status === 'stopped' || t.status === 'paused')
+  const pieceCount = $derived(Math.min(420, Math.max(60, Math.round(t.size / (1 << 20)))))
 
   const tabs: { key: DetailTab; label: string }[] = [
     { key: 'general', label: 'PIECES' },
@@ -23,7 +27,6 @@
   ]
 
   async function act(a: 'pause' | 'resume' | 'recheck' | 'remove') {
-    if (!t) return
     try {
       if (a === 'pause') await api.stop(t.hash)
       else if (a === 'resume') await api.start(t.hash)
@@ -38,48 +41,48 @@
   }
 </script>
 
-{#if t}
-  <section class="flex h-96 shrink-0 flex-col border-t border-line bg-card/40">
-    <!-- head -->
-    <div class="flex shrink-0 items-center justify-between gap-4 px-5 pt-4">
-      <div class="flex items-center gap-2 text-[12px] text-dim2">
-        <span class="rd-key">hash</span><span class="truncate">{t.hash.slice(0, 24)}…</span>
-      </div>
-      <div class="flex items-center gap-2">
-        <button class="rd-btn" onclick={() => act(paused ? 'resume' : 'pause')}>{paused ? '▶ RESUME' : '⏸ PAUSE'}</button>
-        <button class="rd-btn" onclick={() => act('recheck')}>⟳ RECHECK</button>
-        <button class="rd-btn danger" onclick={() => act('remove')}>✕ REMOVE</button>
-        <button class="rd-btn" onclick={() => detail.close()} aria-label="close">✕</button>
-      </div>
+<section
+  class="detail-in flex flex-col overflow-hidden border-b border-line"
+  style="height:{DETAIL_H}px; background:color-mix(in srgb, var(--primary) 4%, transparent); box-shadow:inset 2px 0 0 var(--acc2)"
+>
+  <div class="flex shrink-0 items-center justify-between gap-4 px-5 pt-3">
+    <div class="flex items-center gap-2 text-[12px] text-dim2">
+      <span class="rd-key">hash</span><span class="truncate">{t.hash.slice(0, 28)}…</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="rd-btn" onclick={() => act(paused ? 'resume' : 'pause')}>{paused ? '▶ RESUME' : '⏸ PAUSE'}</button>
+      <button class="rd-btn" onclick={() => act('recheck')}>⟳ RECHECK</button>
+      <button class="rd-btn danger" onclick={() => act('remove')}>✕ REMOVE</button>
+      <button class="rd-btn" onclick={() => detail.close()} aria-label="close">✕</button>
+    </div>
+  </div>
+
+  <div class="flex min-h-0 flex-1 flex-col px-5 pb-3 pt-3">
+    <div class="rd-strip">
+      <div class="rd-stat"><div class="rd-stat-l">size</div><div class="rd-stat-v">{short(t.size)}B</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">done</div><div class="rd-stat-v text-primary">{Math.round(t.done * 100)}%</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">downloaded</div><div class="rd-stat-v">{short(t.completed)}B</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">uploaded</div><div class="rd-stat-v text-acc2">{short(t.upTotal)}B</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">ratio</div><div class="rd-stat-v text-acc2">{ratio(t.ratio)}</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">peers</div><div class="rd-stat-v">{t.peersConnected}/{t.peersTotal}</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">status</div><div class="rd-stat-v">{t.status}</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">tracker</div><div class="rd-stat-v">{t.tracker || '—'}</div></div>
     </div>
 
-    <div class="min-h-0 flex-1 overflow-auto px-5 pb-4 pt-3">
-      <!-- stat strip -->
-      <div class="rd-strip">
-        <div class="rd-stat"><div class="rd-stat-l">size</div><div class="rd-stat-v">{short(t.size)}B</div></div>
-        <div class="rd-stat"><div class="rd-stat-l">done</div><div class="rd-stat-v text-primary">{Math.round(t.done * 100)}%</div></div>
-        <div class="rd-stat"><div class="rd-stat-l">downloaded</div><div class="rd-stat-v">{short(t.completed)}B</div></div>
-        <div class="rd-stat"><div class="rd-stat-l">uploaded</div><div class="rd-stat-v text-acc2">{short(t.upTotal)}B</div></div>
-        <div class="rd-stat"><div class="rd-stat-l">ratio</div><div class="rd-stat-v text-acc2">{ratio(t.ratio)}</div></div>
-        <div class="rd-stat"><div class="rd-stat-l">peers</div><div class="rd-stat-v">{t.peersConnected}/{t.peersTotal}</div></div>
-        <div class="rd-stat"><div class="rd-stat-l">status</div><div class="rd-stat-v">{t.status}</div></div>
-        <div class="rd-stat"><div class="rd-stat-l">tracker</div><div class="rd-stat-v">{t.tracker || '—'}</div></div>
-      </div>
+    <div class="rd-tabs">
+      {#each tabs as tab (tab.key)}
+        <button class="rd-tab {detail.tab === tab.key ? 'on' : ''}" onclick={() => detail.setTab(tab.key)}>{tab.label}</button>
+      {/each}
+    </div>
 
-      <!-- tabs -->
-      <div class="rd-tabs">
-        {#each tabs as tab (tab.key)}
-          <button class="rd-tab {detail.tab === tab.key ? 'on' : ''}" onclick={() => detail.setTab(tab.key)}>{tab.label}</button>
-        {/each}
-      </div>
-
+    <div class="min-h-0 flex-1 overflow-auto">
       {#if detail.tab === 'general'}
         <div class="flex flex-col gap-3">
           <PieceMap done={t.done} count={pieceCount} downloading={t.status === 'downloading'} />
           <div class="flex items-center gap-5 text-[11px] text-dim2">
             <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-sm" style="background:var(--primary)"></i> have</span>
             <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-sm" style="background:var(--warn)"></i> downloading</span>
-            <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-sm" style="background:color-mix(in srgb,var(--primary) 14%,transparent)"></i> missing</span>
+            <span class="flex items-center gap-1.5"><i class="size-2.5 rounded-sm" style="background:color-mix(in srgb,var(--primary) 15%,transparent)"></i> missing</span>
             <span class="ml-auto text-dim">~{pieceCount} pieces · approx</span>
           </div>
         </div>
@@ -143,5 +146,5 @@
         {/if}
       {/if}
     </div>
-  </section>
-{/if}
+  </div>
+</section>

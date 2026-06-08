@@ -141,19 +141,24 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Relay atmosphere — radial glow + scanlines, dark mode only. */
+/* Relay atmosphere — radial glow + scanlines, dark mode only.
+ * NOTE: no `mix-blend-mode` and no `background-attachment: fixed` here — both
+ * force full-screen repaints/compositing every frame and make scrolling feel
+ * sluggish. The scanline overlay is promoted to its own static GPU layer so it
+ * is painted once and never repainted while content scrolls beneath it. */
 .dark body {
   background-image: radial-gradient(900px 520px at 72% -5%, rgba(74, 163, 255, 0.08), transparent 60%);
-  background-attachment: fixed;
 }
 .dark #app::after {
   content: '';
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: repeating-linear-gradient(0deg, rgba(74, 163, 255, 0.03) 0 1px, transparent 1px 3px);
-  mix-blend-mode: overlay;
+  background: repeating-linear-gradient(0deg, rgba(74, 163, 255, 0.05) 0 1px, transparent 1px 3px);
+  opacity: 0.6;
   z-index: 9999;
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 /* thin themed scrollbars */
@@ -225,20 +230,20 @@ body {
   /* bright near-white leading edge that breathes */
   background: color-mix(in srgb, var(--seg-c, var(--primary)) 35%, white);
   box-shadow: 0 0 9px var(--seg-c, var(--primary));
+  will-change: opacity;
   animation: breathe 1.6s ease-in-out infinite;
 }
 .seg .sg.flash {
   animation: flash 0.6s ease-out;
 }
+/* opacity-only -> compositor animation, no per-frame repaint */
 @keyframes breathe {
   0%,
   100% {
-    opacity: 0.55;
-    box-shadow: 0 0 4px var(--seg-c, var(--primary));
+    opacity: 0.5;
   }
   50% {
     opacity: 1;
-    box-shadow: 0 0 12px var(--seg-c, var(--primary));
   }
 }
 
@@ -287,6 +292,21 @@ body {
 }
 .caret-blink {
   animation: blink 1.05s steps(1) infinite;
+}
+
+/* inline detail accordion appear (layout-stable: only fades/translates content) */
+@keyframes detailin {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.detail-in {
+  animation: detailin 0.18s ease-out;
 }
 
 /* subtle row enter */
