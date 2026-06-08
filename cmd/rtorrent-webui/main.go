@@ -120,6 +120,17 @@ func main() {
 		srv.EnablePassthrough(cfg.Features.RPCAllowlist, cfg.Features.RPCDenylist)
 		logger.Printf("rpc passthrough ENABLED (allow=%d deny=%d)", len(cfg.Features.RPCAllowlist), len(cfg.Features.RPCDenylist))
 	}
+	if cfg.Features.RPCProxy {
+		path := srv.EnableRPCProxy(cfg.Features.RPCProxyPath)
+		if cfg.Features.RPCProxyPath != "" && path != cfg.Features.RPCProxyPath {
+			logger.Printf("rpc proxy: configured path %q is invalid or reserved — mounting at %q instead", cfg.Features.RPCProxyPath, path)
+		}
+		authNote := "OPEN (auth.mode=none) — keep on an internal network"
+		if cfg.Auth.Mode == "basic" {
+			authNote = "behind basic auth — clients use http://user:pass@host" + path
+		}
+		logger.Printf("rpc proxy ENABLED at %s — raw XML/JSON-RPC byte-pipe to rtorrent, UNFILTERED full control; %s", path, authNote)
+	}
 
 	// Launch the perpetual poll loop now that the (optional) history sink is wired;
 	// it runs at the idle cadence until a client connects.

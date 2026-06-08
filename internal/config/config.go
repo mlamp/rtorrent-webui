@@ -70,6 +70,8 @@ type Features struct {
 	RPCPassthrough bool     `toml:"rpc_passthrough"`
 	RPCAllowlist   []string `toml:"rpc_allowlist"`
 	RPCDenylist    []string `toml:"rpc_denylist"`
+	RPCProxy       bool     `toml:"rpc_proxy"`      // raw XML-RPC byte-pipe (replaces nginx scgi_pass for *arr)
+	RPCProxyPath   string   `toml:"rpc_proxy_path"` // mount point; defaults to "/RPC2"
 	DeleteWithData bool     `toml:"delete_with_data"`
 }
 
@@ -80,7 +82,7 @@ func Default() Config {
 		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), IdleInterval: Duration(30 * time.Second), MaxInflight: 8, MaxUploadMB: 12},
 		Auth:     Auth{Mode: "none", Realm: "rtorrent-webui"},
 		Insight:  Insight{GeoIPDB: "/usr/share/GeoIP/dbip-country-lite.mmdb"},
-		Features: Features{RPCDenylist: []string{"execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"}},
+		Features: Features{RPCDenylist: []string{"execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"}, RPCProxyPath: "/RPC2"},
 	}
 }
 

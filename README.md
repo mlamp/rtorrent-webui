@@ -15,6 +15,7 @@ Image: **`ghcr.io/mlamp/rtorrent-webui:latest`**
 - Insight: traffic-history graph (persisted in SQLite), disk-space, tracker-search seam
 - Dark / light (Catppuccin), responsive, keyboard-friendly
 - Optional HTTP Basic auth (or trust a fronting reverse proxy); allowlisted `/api/rpc` passthrough
+- Optional raw `/RPC2` XML-RPC proxy — point *arr straight at the webui, drop the nginx `scgi_pass` shim
 - Single static binary, no CGO; multi-arch (amd64 / arm64)
 
 ## Requirements
@@ -76,6 +77,7 @@ it, or override individual settings with flags. See
 | `insight.history_db` | SQLite path for traffic history (e.g. `/data/history.db`); stores cumulative counters, derives rates, rolls up raw 15m → 1m 24h → 1h 7d → 1d 1y |
 | `insight.geoip_db` | MaxMind/DB-IP `.mmdb` for peer country flags (optional) |
 | `features.rpc_passthrough` | enable `POST /api/rpc` (allow/deny lists) |
+| `features.rpc_proxy` | enable the raw `/RPC2` XML-RPC proxy for *arr (unfiltered; inherits `[auth]`) |
 
 ### Auth
 
@@ -111,6 +113,31 @@ your own MaxMind **GeoLite2-Country.mmdb** instead, mount it and set
 `GET /api/torrents`, `GET /api/events` (SSE snapshot+deltas),
 `GET /api/torrents/{hash}/{files,peers,trackers}`, `GET /api/{stats,diskspace,history}`,
 action endpoints under `/api/torrents/{hash}/…`, and (if enabled) `POST /api/rpc`.
+
+### `/RPC2` proxy (drop the nginx shim for *arr)
+
+The typical rtorrent stack puts an nginx `scgi_pass` location at `/RPC2` so
+Sonarr/Radarr/Lidarr can drive rtorrent over XML-RPC. Set
+`features.rpc_proxy = true` and the webui serves that itself — a transparent
+byte-pipe to the same SCGI socket — so you can delete the nginx container and just
+repoint the *arr clients:
+
+```
+URL Base:  (blank)
+Host/Port: <webui-host> : 8080
+Path:      /RPC2
+```
+
+It forwards the request body verbatim (XML-RPC, or JSON-RPC if the client sends
+`application/json`) and echoes rtorrent's response.
+
+> **This is full, unfiltered control of rtorrent** (including `execute.*`), so it
+> follows the same logic as the nginx setup it replaces: it inherits the `[auth]`
+> section. With `auth.mode = "basic"`, *arr clients authenticate exactly as they
+> would against an htpasswd-protected nginx — put the credentials in the field or
+> use `http://user:pass@host:8080/RPC2`. With `auth.mode = "none"`, the endpoint
+> is open, so keep it on an internal Docker network only. Unlike `/api/rpc`, there
+> is **no** method allow/deny filter here — treat it as root-equivalent.
 
 ## Development
 

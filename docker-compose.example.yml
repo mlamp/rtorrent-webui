@@ -15,6 +15,9 @@ services:
     depends_on: [rtorrent]
     ports:
       - "8080:8080"
+    # To let Sonarr/Radarr/… drive rtorrent through this container instead of a
+    # separate nginx scgi_pass shim, set features.rpc_proxy = true in config.toml
+    # and point the *arr clients at http://webui:8080/RPC2 (path "/RPC2").
     volumes:
       - rtorrent-socket:/var/run/rtorrent      # shared SCGI socket (read-write)
       - ./downloads:/downloads:ro              # for /api/diskspace (read-only is fine)

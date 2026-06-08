@@ -34,7 +34,19 @@ history_db        = "/data/history.db"  # SQLite time series; empty disables his
 search_enabled    = false          # tracker-search seam (no adapters in v1)
 
 [features]
-rpc_passthrough = false            # enable POST /api/rpc
+rpc_passthrough = false            # enable POST /api/rpc (JSON, allow/deny filtered)
 rpc_allowlist   = []               # if non-empty, only these methods are callable
 rpc_denylist    = ["execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"]
+
+# Raw XML-RPC proxy: a byte-pipe to rtorrent's SCGI, the same thing nginx's
+# `scgi_pass` does. Turn this on and point *arr (Sonarr/Radarr/Lidarr/…) at
+# http://<host>:8080/RPC2 instead of running a separate nginx shim.
+# SECURITY: UNFILTERED — full control of rtorrent (incl. execute.*). It inherits
+# the [auth] section above: with auth.mode="basic" clients must authenticate
+# (http://user:pass@host/RPC2, like nginx+ruTorrent sharing an htpasswd); with
+# auth.mode="none" it is open, so keep it on an internal network only.
+rpc_proxy       = false            # enable the /RPC2 byte-pipe
+rpc_proxy_path  = "/RPC2"          # mount point (the rtorrent convention); must not
+                                   # collide with /healthz or /api/* — those fall back to /RPC2
+
 delete_with_data = false           # allow DELETE to also remove files (wired later)

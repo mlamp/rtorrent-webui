@@ -78,6 +78,15 @@ func (c *Client) Call(ctx context.Context, method string, params ...any) (json.R
 	return resp.Result, nil
 }
 
+// Forward sends a request body to rtorrent verbatim and returns its raw response
+// body, bypassing JSON-RPC framing entirely. It is the byte-pipe behind the
+// XML-RPC proxy (/RPC2): the caller supplies the wire Content-Type (text/xml for
+// XML-RPC, application/json for JSON-RPC) and rtorrent routes on it exactly as
+// nginx's scgi_pass does. No method filtering happens here.
+func (c *Client) Forward(ctx context.Context, contentType string, body []byte) ([]byte, error) {
+	return c.scgi.Do(ctx, contentType, body)
+}
+
 // BatchItem is one call in a batch.
 type BatchItem struct {
 	Method string
