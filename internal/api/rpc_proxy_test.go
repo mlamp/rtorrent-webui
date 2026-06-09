@@ -78,7 +78,7 @@ func parseSCGI(t *testing.T, raw []byte) (map[string]string, []byte) {
 
 func newProxyServer(t *testing.T, scgiAddr string) *Server {
 	t.Helper()
-	client := rpc.New(scgi.New(scgiAddr, 4, 2*time.Second))
+	client := rpc.New(scgi.New(scgiAddr, 4, 2*time.Second, 2*time.Second))
 	srv := New(sse.NewHub(), client, "main")
 	srv.EnableRPCProxy("/RPC2")
 	return srv
@@ -188,7 +188,7 @@ func TestRPCProxyRejectsNonPost(t *testing.T) {
 func TestRPCProxyDisabledByDefault(t *testing.T) {
 	// Without EnableRPCProxy, /RPC2 must not be a live endpoint (falls through to
 	// the SPA catch-all, never a 200 XML proxy response).
-	srv := New(sse.NewHub(), rpc.New(scgi.New("tcp://127.0.0.1:1", 1, time.Second)), "main")
+	srv := New(sse.NewHub(), rpc.New(scgi.New("tcp://127.0.0.1:1", 1, time.Second, time.Second)), "main")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/RPC2", strings.NewReader(`<methodCall/>`))
 	req.Header.Set("Content-Type", "text/xml")
@@ -214,14 +214,14 @@ func TestEnableRPCProxyPathFallback(t *testing.T) {
 		"/api/torrents",
 	}
 	for _, in := range fallback {
-		srv := New(sse.NewHub(), rpc.New(scgi.New("tcp://127.0.0.1:1", 1, time.Second)), "main")
+		srv := New(sse.NewHub(), rpc.New(scgi.New("tcp://127.0.0.1:1", 1, time.Second, time.Second)), "main")
 		if got := srv.EnableRPCProxy(in); got != "/RPC2" {
 			t.Errorf("EnableRPCProxy(%q) resolved to %q, want /RPC2", in, got)
 		}
 	}
 
 	// A valid custom path is honored verbatim.
-	srv := New(sse.NewHub(), rpc.New(scgi.New("tcp://127.0.0.1:1", 1, time.Second)), "main")
+	srv := New(sse.NewHub(), rpc.New(scgi.New("tcp://127.0.0.1:1", 1, time.Second, time.Second)), "main")
 	if got := srv.EnableRPCProxy("/myrpc"); got != "/myrpc" {
 		t.Errorf("EnableRPCProxy(/myrpc) = %q, want /myrpc", got)
 	}

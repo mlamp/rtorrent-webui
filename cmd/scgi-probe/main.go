@@ -24,7 +24,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	cl := rpc.New(scgi.New(*addr, 8, 10*time.Second))
+	cl := rpc.New(scgi.New(*addr, 8, 3*time.Second, 60*time.Second))
 	fmt.Printf("probing rtorrent SCGI at %s\n", *addr)
 
 	ver, err := cl.ClientVersion(ctx)

@@ -45,7 +45,7 @@ func (s *Server) handleRPCPassthrough(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	res, err := s.rpc.Call(ctx, req.Method, req.Params...)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

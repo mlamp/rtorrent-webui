@@ -74,7 +74,7 @@ func main() {
 		cfg.Downloads.Dirs = strings.Split(*diskDirs, ",")
 	}
 
-	rpcClient := rpc.New(scgi.New(cfg.Rtorrent.Socket, cfg.Rtorrent.MaxInflight, 10*time.Second))
+	rpcClient := rpc.New(scgi.New(cfg.Rtorrent.Socket, cfg.Rtorrent.MaxInflight, 3*time.Second, cfg.Rtorrent.RPCTimeout.D()))
 
 	var src poll.Source
 	if *mock > 0 {

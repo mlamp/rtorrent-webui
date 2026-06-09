@@ -42,7 +42,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	files, err := s.detail.Files(ctx, r.PathValue("hash"))
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	writeOK(w, files)
@@ -53,7 +53,7 @@ func (s *Server) handlePieces(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	pieces, err := s.detail.Pieces(ctx, r.PathValue("hash"))
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	writeOK(w, pieces)
@@ -64,7 +64,7 @@ func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	peers, err := s.detail.Peers(ctx, r.PathValue("hash"))
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	if s.geo != nil {
@@ -80,7 +80,7 @@ func (s *Server) handleTrackers(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	trackers, err := s.detail.Trackers(ctx, r.PathValue("hash"))
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	writeOK(w, trackers)
@@ -102,7 +102,7 @@ func (s *Server) handleFilePriority(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.detail.SetFilePriority(ctx, r.PathValue("hash"), index, body.Priority); err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	writeOK(w, map[string]bool{"ok": true})
@@ -124,7 +124,7 @@ func (s *Server) handleTrackerEnabled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.detail.SetTrackerEnabled(ctx, r.PathValue("hash"), index, body.Enabled); err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	writeOK(w, map[string]bool{"ok": true})

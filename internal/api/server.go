@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/mlamp/rtorrent-webui/internal/insight/history"
 	"github.com/mlamp/rtorrent-webui/internal/insight/search"
 	"github.com/mlamp/rtorrent-webui/internal/rpc"
+	"github.com/mlamp/rtorrent-webui/internal/scgi"
 	"github.com/mlamp/rtorrent-webui/internal/sse"
 	"github.com/mlamp/rtorrent-webui/web"
 )
@@ -82,6 +84,19 @@ func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	})
 }
 
+// writeRPCErr maps an rtorrent transport/RPC error to an HTTP response. A dial
+// failure (daemon down/restarting/crash-looping) becomes 503 "rtorrent_unreachable"
+// so the UI can show a transient "reconnecting" state instead of a hard error; any
+// other RPC error stays 502 "rpc_error".
+func writeRPCErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, scgi.ErrUnreachable) {
+		writeErr(w, http.StatusServiceUnavailable, "rtorrent_unreachable",
+			"rtorrent is not reachable (restarting?) — retrying")
+		return
+	}
+	writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -105,7 +120,7 @@ func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	torrents, globals, err := s.rpc.Poll(ctx, s.view)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	writeOK(w, map[string]any{"globals": globals, "torrents": torrents})
@@ -116,7 +131,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	_, globals, err := s.rpc.Poll(ctx, s.view)
 	if err != nil {
-		writeErr(w, http.StatusBadGateway, "rpc_error", err.Error())
+		writeRPCErr(w, err)
 		return
 	}
 	writeOK(w, globals)

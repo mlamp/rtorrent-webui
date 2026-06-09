@@ -10,6 +10,10 @@ poll_interval     = "1s"           # LIVE cadence while a browser is watching ->
 idle_poll_interval = "30s"         # background cadence with no client open (history still recorded;
                                    # cumulative counters keep totals exact, only burst shape is coarser)
 max_inflight      = 8              # concurrent SCGI connections cap
+rpc_timeout       = "60s"          # whole-request deadline (nginx scgi_read_timeout parity); keep
+                                   # generous so a slow d.multicall isn't abandoned mid-flight (which
+                                   # can wedge rtorrent's scgi thread). Dial is retried briefly so a
+                                   # ~1s daemon restart rides over without surfacing an error.
 max_upload_mb = 12                 # reject .torrent uploads larger than this
 
 [auth]

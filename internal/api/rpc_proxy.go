@@ -1,9 +1,12 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/mlamp/rtorrent-webui/internal/scgi"
 )
 
 // maxRPCProxyBytes bounds a forwarded request body. XML-RPC calls are tiny; even
@@ -67,7 +70,11 @@ func (s *Server) handleRPCProxy(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	out, err := s.rpc.Forward(ctx, ct, body)
 	if err != nil {
-		http.Error(w, "rtorrent unreachable: "+err.Error(), http.StatusBadGateway)
+		status := http.StatusBadGateway
+		if errors.Is(err, scgi.ErrUnreachable) {
+			status = http.StatusServiceUnavailable // 503: daemon down/restarting — clients should retry
+		}
+		http.Error(w, "rtorrent unreachable: "+err.Error(), status)
 		return
 	}
 	// rtorrent answers in the dialect it was addressed in; mirror it onto the

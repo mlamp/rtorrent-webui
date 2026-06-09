@@ -41,6 +41,7 @@ type Rtorrent struct {
 	IdleInterval Duration `toml:"idle_poll_interval"` // background cadence for history when idle
 	MaxInflight  int      `toml:"max_inflight"`
 	MaxUploadMB  int      `toml:"max_upload_mb"`
+	RPCTimeout   Duration `toml:"rpc_timeout"` // whole-request deadline (nginx scgi_read_timeout parity); generous so big multicalls aren't abandoned mid-flight
 }
 
 type Auth struct {
@@ -79,7 +80,7 @@ type Features struct {
 func Default() Config {
 	return Config{
 		Server:   Server{Listen: ":8080"},
-		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), IdleInterval: Duration(30 * time.Second), MaxInflight: 8, MaxUploadMB: 12},
+		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), IdleInterval: Duration(30 * time.Second), MaxInflight: 8, MaxUploadMB: 12, RPCTimeout: Duration(60 * time.Second)},
 		Auth:     Auth{Mode: "none", Realm: "rtorrent-webui"},
 		Insight:  Insight{GeoIPDB: "/usr/share/GeoIP/dbip-country-lite.mmdb"},
 		Features: Features{RPCDenylist: []string{"execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"}, RPCProxyPath: "/RPC2"},
