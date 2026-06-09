@@ -49,10 +49,15 @@ func (c *Client) Poll(ctx context.Context, view string) ([]model.Torrent, model.
 	for _, f := range torrentFields {
 		mcParams = append(mcParams, f)
 	}
+	// NB: the global DL/UL *rates* are summed from the per-torrent d.down.rate /
+	// d.up.rate below, NOT taken from throttle.global_*.rate. The global throttle
+	// rate also counts BitTorrent protocol overhead (handshakes, bitfields,
+	// have/request/keepalive messages) via node_used_unthrottled, so it shows a
+	// non-zero "download" even when only seeding. The per-torrent rates are fed
+	// only by the chunk paths, i.e. real payload. We still pull the global
+	// totals/limits, which have no per-torrent payload-only equivalent here.
 	items := []BatchItem{
 		{Method: "d.multicall2", Params: mcParams},
-		{Method: "throttle.global_down.rate", Params: []any{""}},
-		{Method: "throttle.global_up.rate", Params: []any{""}},
 		{Method: "throttle.global_down.total", Params: []any{""}},
 		{Method: "throttle.global_up.total", Params: []any{""}},
 		{Method: "throttle.global_down.max_rate", Params: []any{""}},
@@ -72,15 +77,16 @@ func (c *Client) Poll(ctx context.Context, view string) ([]model.Torrent, model.
 	}
 
 	g := model.Globals{
-		DownRate:     asInt(results[1]),
-		UpRate:       asInt(results[2]),
-		DownTotal:    asInt(results[3]),
-		UpTotal:      asInt(results[4]),
-		DownLimit:    asInt(results[5]),
-		UpLimit:      asInt(results[6]),
+		DownTotal:    asInt(results[1]),
+		UpTotal:      asInt(results[2]),
+		DownLimit:    asInt(results[3]),
+		UpLimit:      asInt(results[4]),
 		TorrentCount: len(torrents),
 	}
+	// Payload-only global rates: sum the per-torrent (chunk-path) rates.
 	for _, t := range torrents {
+		g.DownRate += t.DownRate
+		g.UpRate += t.UpRate
 		if t.DownRate > 0 || t.UpRate > 0 {
 			g.ActiveCount++
 		}
