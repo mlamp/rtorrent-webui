@@ -9,7 +9,7 @@
   import { detail } from '$lib/stores/detail.svelte'
   import { connectSSE } from '$lib/api/sse'
   import { api, bulk } from '$lib/api/client'
-  import { short, rate, trackerHost } from '$lib/format'
+  import { short, trackerHost } from '$lib/format'
   import SpeedGraph from './components/SpeedGraph.svelte'
   import TorrentTable from './components/table/TorrentTable.svelte'
   import GridView from './components/grid/GridView.svelte'
@@ -49,7 +49,11 @@
     const d = globals.downRate
     const u = globals.upRate
     const live = globals.connection === 'live'
-    document.title = live && (d > 0 || u > 0) ? `↓ ${rate(d)} ↑ ${rate(u)} · TorUI` : 'TorUI · rtorrent'
+    // Show only the non-zero side(s) — a pure seed shows just ↑, idle shows neither.
+    const parts: string[] = []
+    if (d > 0) parts.push(`↓ ${short(d)}B/s`)
+    if (u > 0) parts.push(`↑ ${short(u)}B/s`)
+    document.title = live && parts.length ? `${parts.join(' ')} · TorUI` : 'TorUI · rtorrent'
   })
 
   const all = $derived([...torrents.map.values()])

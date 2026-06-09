@@ -14,15 +14,26 @@ export function rate(n: number): string {
   return n > 0 ? `${bytes(n)}/s` : '0 B/s'
 }
 
-/** Compact magnitude, e.g. 4128768 -> "3.9M" (used in dense terminal cells). */
+/**
+ * Compact magnitude in binary (1024) units, capped at 3 significant figures so
+ * the number is at most 3 characters wide: below ten keeps one decimal
+ * (1.0, 1.1, 9.9); 10..999 are whole numbers with no dot (10, 99, 110, 999);
+ * then it carries to the next unit — 999K -> 1.0M. e.g. 4128768 -> "3.9M".
+ */
 export function short(n: number): string {
   if (!n || n <= 0) return '0'
   const u = ['', 'K', 'M', 'G', 'T', 'P']
-  // Clamp the exponent to >= 0 so sub-1 inputs (e.g. fractional axis ticks) don't
-  // index u[-1] (undefined) and render as "256.0undefined".
-  const i = Math.min(u.length - 1, Math.max(0, Math.floor(Math.log(n) / Math.log(1024))))
-  const v = n / Math.pow(1024, i)
-  return `${i === 0 ? v : v.toFixed(1)}${u[i]}`
+  let v = Math.abs(n)
+  let i = 0
+  // Step up a unit while the value would round to a 4th digit (>= 1000), so we
+  // never exceed 3 sig figs — 999 rolls over to "1.0" of the next unit.
+  while (v >= 999.5 && i < u.length - 1) {
+    v /= 1024
+    i++
+  }
+  // One decimal below ten (KiB and up); whole numbers from 10 up and for raw bytes.
+  const decimals = i > 0 && v < 9.95 ? 1 : 0
+  return `${v.toFixed(decimals)}${u[i]}`
 }
 
 /** rtorrent stores ratio ×1000. */
