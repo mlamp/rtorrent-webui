@@ -35,4 +35,10 @@ export interface TrackerInfo {
   type: number
   latestEvent: string
   success: number
+  // Per-tracker announce health. rtorrent keeps only the LAST failure message,
+  // globally (d.message — any tracker in the set writes it), so these counters
+  // are what identifies WHICH tracker is erroring.
+  failed: number
+  failedAt: number // unix; 0 = never failed
+  successAt: number // unix; 0 = never succeeded
 }

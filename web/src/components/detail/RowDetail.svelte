@@ -1,18 +1,20 @@
+<script lang="ts" module>
+  // Fixed height so the list's virtualization math stays exact — TorrentTable
+  // imports this. In a modal we fill the host instead.
+  export const DETAIL_H = 560
+</script>
+
 <script lang="ts">
   import { detail, type DetailTab } from '$lib/stores/detail.svelte'
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import { api, silentGet } from '$lib/api/client'
-  import { short, ratio } from '$lib/format'
+  import { short, ratio, relativeTime } from '$lib/format'
   import { onMount } from 'svelte'
   import PieceMap from './PieceMap.svelte'
   import CountryFlag from './CountryFlag.svelte'
   import TrafficChart from '../charts/TrafficChart.svelte'
   import { decodePieces } from '$lib/pieces'
   import { peerFlags } from '$lib/peers'
-
-  // Fixed height so the list's virtualization math stays exact (must match
-  // TorrentTable's DETAIL_H). In a modal we fill the host instead.
-  export const DETAIL_H = 472
 
   let { t, inModal = false }: { t: TorrentRow; inModal?: boolean } = $props()
 
@@ -143,7 +145,10 @@
   <div class="shrink-0 px-5 pt-4">
     <div class="rd-head">
       <div class="flex min-w-0 items-center gap-2 text-[12px] text-dim2">
-        <span class="rd-key">hash</span><span class="truncate font-mono">{t.hash.slice(0, 24)}…</span>
+        <span class="rd-key">hash</span><span class="shrink-0 font-mono">{t.hash.slice(0, 16)}…</span>
+        {#if t.directory}
+          <span class="rd-key ml-2">path</span><span class="truncate font-mono" title={t.directory}>{t.directory}</span>
+        {/if}
       </div>
       <div class="flex items-center gap-2">
         <button class="rd-btn" onclick={() => act(paused ? 'resume' : 'pause')}>{paused ? '▶ RESUME' : '⏸ PAUSE'}</button>
@@ -161,7 +166,11 @@
       <div class="rd-stat"><div class="rd-stat-l">ratio</div><div class="rd-stat-v text-acc2">{ratio(t.ratio)}</div></div>
       <div class="rd-stat"><div class="rd-stat-l">peers</div><div class="rd-stat-v">{t.peersConnected}/{t.seedsConnected}</div></div>
       <div class="rd-stat"><div class="rd-stat-l">status</div><div class="rd-stat-v">{t.status}</div></div>
-      <div class="rd-stat"><div class="rd-stat-l">tracker</div><div class="rd-stat-v">{t.tracker || '—'}</div></div>
+      <!-- "created": d.creation_date is the metainfo creation stamp, not the add
+           time (rtorrent's d.load_date re-stamps on every restart, so there is no
+           stable added-at) — label it for what it is -->
+      <div class="rd-stat"><div class="rd-stat-l">created</div><div class="rd-stat-v">{relativeTime(t.added)}</div></div>
+      <div class="rd-stat"><div class="rd-stat-l">tracker</div><div class="rd-stat-v" title={t.tracker}>{t.tracker || '—'}</div></div>
     </div>
 
     <!-- activity graph + timeframe selector — real per-torrent history -->
@@ -248,8 +257,8 @@
           {#each detail.peers as p (p.address + ':' + p.port)}
             <div class="grid items-center gap-3 rounded-sm px-2 py-1 text-[11.5px] hover:bg-[color-mix(in_srgb,var(--primary)_4%,transparent)]" style="grid-template-columns:32px 130px 1fr 70px 64px 64px 52px">
               <span class="rd-cc"><CountryFlag code={p.country} /></span>
-              <span class="truncate font-mono">{p.address}</span>
-              <span class="truncate text-dim2">{p.client}</span>
+              <span class="truncate font-mono" title={p.address}>{p.address}</span>
+              <span class="truncate text-dim2" title={p.client}>{p.client}</span>
               <span class="rd-flags font-mono">{peerFlags(p)}</span>
               <span class="text-right font-mono" style="color:{p.downRate ? 'var(--primary)' : 'var(--dim)'}">{p.downRate ? short(p.downRate) : '—'}</span>
               <span class="text-right font-mono" style="color:{p.upRate ? 'var(--acc2)' : 'var(--dim)'}">{p.upRate ? short(p.upRate) : '—'}</span>
@@ -259,16 +268,32 @@
         </div>
       {/if}
     {:else if detail.tab === 'trackers'}
+      <!-- the torrent-wide d.message is the only place rtorrent keeps the failure
+           TEXT (per-tracker state is counters only) — surface it here next to the
+           per-tracker rows that say which tracker it came from -->
+      {#if t.message}
+        <div class="mb-2 truncate font-mono text-[11px]" style="color:{t.status === 'error' ? 'var(--status-error)' : 'var(--status-check)'}" title={t.message}>{t.message}</div>
+      {/if}
       {#if detail.trackers.length === 0}
         <p class="text-dim">{detail.loading ? 'loading…' : 'no trackers'}</p>
       {:else}
         <div class="rd-trk">
           {#each detail.trackers as tr (tr.index)}
+            <!-- failing = the last announce attempt failed (rtorrent has no per-tracker
+                 error text, only counters/timestamps — the message itself lives in the
+                 torrent-wide d.message) -->
+            {@const failing = tr.enabled && tr.failed > 0 && tr.failedAt >= tr.successAt}
             <div class="rd-trkrow">
-              <span class="rd-dot {tr.enabled ? 'ok' : 'idle'}"></span>
+              <span class="rd-dot {tr.enabled ? (failing ? 'err' : 'ok') : 'idle'}"></span>
               <span class="rd-trkname truncate font-mono" title={tr.url}>{tr.url}</span>
-              <span class="text-dim2">{tr.latestEvent || (tr.enabled ? 'working' : 'disabled')}</span>
-              <span class="font-mono text-dim">announces {tr.success}</span>
+              {#if failing}
+                <span class="text-status-error" title="last failure {relativeTime(tr.failedAt)}{tr.successAt ? ` · last ok ${relativeTime(tr.successAt)}` : ' · never succeeded'}">failing</span>
+              {:else}
+                <span class="text-dim2">{tr.latestEvent || (tr.enabled ? 'working' : 'disabled')}</span>
+              {/if}
+              <span class="font-mono {failing ? 'text-status-error' : 'text-dim'}">
+                ok {tr.success}{tr.failed > 0 ? ` · fail ${tr.failed}` : ''}
+              </span>
               <button class="rd-btn ml-auto" onclick={() => detail.toggleTracker(tr.index, !tr.enabled)}>{tr.enabled ? 'disable' : 'enable'}</button>
             </div>
           {/each}

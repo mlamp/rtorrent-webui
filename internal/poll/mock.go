@@ -39,6 +39,11 @@ func MockSource(n int) Source {
 			ChunkSize:      chunk,
 			SizeChunks:     (size + chunk - 1) / chunk,
 		}
+		// mirror MockDetail: every third torrent has a dead backup tracker, whose
+		// announce failures land in d.message as a warning (not an error status)
+		if i%3 == 1 {
+			tor[i].Message = "Tracker: [Could not resolve hostname]"
+		}
 	}
 	tick := 0
 	var dlTotal, ulTotal int64

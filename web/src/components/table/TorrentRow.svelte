@@ -91,8 +91,10 @@
     {#if t.label}
       <span class="ml-1 shrink-0 rounded-sm border border-line px-1.5 text-[10px] text-acc2">{t.label}</span>
     {/if}
-    {#if t.message && t.status === 'error'}
-      <span class="ml-1 shrink-0 truncate text-[10px] text-status-error" title={t.message}>{t.message}</span>
+    <!-- tracker messages ("Tracker: […]") come from ANY tracker in the set failing
+         and don't error the torrent — show them as an amber warning instead -->
+    {#if t.message}
+      <span class="ml-1 max-w-[45%] truncate text-[10px] {t.status === 'error' ? 'text-status-error' : 'text-status-check'}" title={t.message}>{t.message}</span>
     {/if}
   </div>
 

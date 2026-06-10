@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/mlamp/rtorrent-webui/internal/model"
 )
@@ -206,16 +207,16 @@ func decodeTorrents(raw json.RawMessage) ([]model.Torrent, error) {
 		}
 		left := asIntRaw(r[18])
 		t := model.Torrent{
-			Hash:           asStr(r[0]),
-			Name:           asStr(r[1]),
-			Size:           asIntRaw(r[2]),
-			Completed:      asIntRaw(r[3]),
-			DownRate:       asIntRaw(r[4]),
-			UpRate:         asIntRaw(r[5]),
-			UpTotal:        asIntRaw(r[6]),
-			Ratio:          asIntRaw(r[7]),
-			Label:          asStr(r[13]),
-			Directory:      asStr(r[14]),
+			Hash:            asStr(r[0]),
+			Name:            asStr(r[1]),
+			Size:            asIntRaw(r[2]),
+			Completed:       asIntRaw(r[3]),
+			DownRate:        asIntRaw(r[4]),
+			UpRate:          asIntRaw(r[5]),
+			UpTotal:         asIntRaw(r[6]),
+			Ratio:           asIntRaw(r[7]),
+			Label:           asStr(r[13]),
+			Directory:       asStr(r[14]),
 			PeersConnected:  asIntRaw(r[15]),
 			SeedsConnected:  asIntRaw(r[17]),
 			Added:           asIntRaw(r[19]),
@@ -238,7 +239,7 @@ func deriveStatus(state, isActive, isOpen, isHashChecking, left int64, message s
 		return model.StatusHashing
 	case state == 0 || isOpen == 0:
 		return model.StatusStopped
-	case message != "":
+	case message != "" && !isTrackerWarning(message):
 		return model.StatusError
 	case isActive == 0:
 		return model.StatusPaused
@@ -247,6 +248,25 @@ func deriveStatus(state, isActive, isOpen, isHashChecking, left int64, message s
 	default:
 		return model.StatusDownloading
 	}
+}
+
+// isTrackerWarning matches the TRANSPORT subset of rtorrent's "Tracker: [<msg>]"
+// d.message format (core/download.cc receive_tracker_msg). A transport failure
+// (resolve/timeout/refused) from ANY tracker in the set puts this on the whole
+// torrent — and any success clears it — so with one dead backup tracker it
+// flip-flops while the torrent transfers fine on the others. That's tracker
+// health, not a torrent error: the row keeps its real transfer status and shows
+// the message as a warning; per-tracker failure counters in the detail view say
+// which tracker is sick.
+//
+// A tracker REJECTION is different: libtorrent wraps an announce response whose
+// body carries a "failure reason" key (unregistered torrent, banned passkey) as
+// `Tracker: [Failure reason "..."]` (tracker_http.cc). That's an authoritative
+// answer, typically from a single-tracker private torrent where nothing ever
+// clears it — it stays an error so the ERROR filter still finds dead torrents.
+func isTrackerWarning(message string) bool {
+	return strings.HasPrefix(message, "Tracker: [") &&
+		!strings.HasPrefix(message, `Tracker: [Failure reason`)
 }
 
 // --- tolerant value coercion (rtorrent mixes JSON numbers and strings) ---

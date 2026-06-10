@@ -1,6 +1,6 @@
 <script lang="ts">
   import TorrentRow from './TorrentRow.svelte'
-  import RowDetail from '../detail/RowDetail.svelte'
+  import RowDetail, { DETAIL_H } from '../detail/RowDetail.svelte'
   import { view, type ColumnKey } from '$lib/stores/view.svelte'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
@@ -11,7 +11,6 @@
   // shared grid template: select · name · progress · rate · size · ratio · eta
   const COLS = '26px minmax(0,1fr) 150px 86px 58px 50px 50px'
   const ROW_H = 46
-  const DETAIL_H = 472 // matches RowDetail's fixed height — keeps windowing exact
   const OVERSCAN = 6
 
   let scrollTop = $state(0)

@@ -35,7 +35,9 @@
       </div>
       <button class="modal-x" onclick={() => detail.close()} aria-label="close">✕</button>
     </div>
-    <div class="modal-body" style="padding:0; height:min(620px,72vh)">
+    <!-- matches the inline panel's DETAIL_H growth: the stat strip wraps to two
+         rows at the modal's 880px width, so the body needs the extra headroom -->
+    <div class="modal-body" style="padding:0; height:min(700px,80vh)">
       <RowDetail {t} inModal />
     </div>
   </div>

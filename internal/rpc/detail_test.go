@@ -71,11 +71,17 @@ func TestDecodeFiles(t *testing.T) {
 	}
 }
 
+func TestTrackerFieldsAlignment(t *testing.T) {
+	if len(trackerFields) != 8 {
+		t.Fatalf("trackerFields has %d entries; decodeTrackers reads r[0..7] — keep them in lockstep", len(trackerFields))
+	}
+}
+
 func TestDecodeTrackers(t *testing.T) {
 	rows := [][]json.RawMessage{
-		rawRow("https://t.example/announce", 1, 0, 1, 7), // event 1 → completed
-		rawRow("udp://b.example/x", 0, 1, 0, 0),          // event 0 → "" (UI fallback fires)
-		rawRow("short", 1),                                // dropped
+		rawRow("https://t.example/announce", 1, 0, 1, 7, 0, 0, 1718000000), // event 1 → completed, healthy
+		rawRow("udp://b.example/x", 0, 1, 0, 0, "12", 1718000300, 0),       // event 0 → "" (UI fallback fires); failing
+		rawRow("short", 1), // dropped
 	}
 	got := decodeTrackers(rows)
 	if len(got) != 2 {
@@ -90,6 +96,14 @@ func TestDecodeTrackers(t *testing.T) {
 	if got[1].LatestEvent != "" {
 		t.Fatalf("event id 0 → %q, want \"\" so the UI shows working/disabled", got[1].LatestEvent)
 	}
+	// per-tracker health: healthy tracker has no fails, failing one decodes its
+	// counter (numeric string coerced) and last-failed/last-ok timestamps
+	if got[0].Failed != 0 || got[0].SuccessAt != 1718000000 {
+		t.Fatalf("healthy tracker decode wrong: %+v", got[0])
+	}
+	if got[1].Failed != 12 || got[1].FailedAt != 1718000300 || got[1].SuccessAt != 0 {
+		t.Fatalf("failing tracker decode wrong: %+v", got[1])
+	}
 }
 
 func TestTrackerEvent(t *testing.T) {
@@ -100,8 +114,8 @@ func TestTrackerEvent(t *testing.T) {
 		want string
 	}{
 		{num(0), ""}, {num(1), "completed"}, {num(2), "started"}, {num(3), "stopped"}, {num(4), "scrape"},
-		{num(9), ""},               // out-of-range
-		{str("3"), "stopped"},      // numeric string
+		{num(9), ""},                    // out-of-range
+		{str("3"), "stopped"},           // numeric string
 		{str("completed"), "completed"}, // already a word (older builds)
 		{str("none"), ""}, {str(""), ""},
 	}

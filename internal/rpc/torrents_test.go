@@ -140,3 +140,32 @@ func TestDecodeTorrentsChunks(t *testing.T) {
 		t.Fatalf("chunk fields decoded wrong: %+v", got[0])
 	}
 }
+
+func TestDeriveStatus(t *testing.T) {
+	cases := []struct {
+		name                                       string
+		state, isActive, isOpen, isHashCheck, left int64
+		message                                    string
+		want                                       model.Status
+	}{
+		{"downloading", 1, 1, 1, 0, 100, "", model.StatusDownloading},
+		{"seeding", 1, 1, 1, 0, 0, "", model.StatusSeeding},
+		{"stopped", 0, 0, 0, 0, 100, "", model.StatusStopped},
+		{"hashing wins", 1, 1, 1, 1, 100, "", model.StatusHashing},
+		{"real message is an error", 1, 1, 1, 0, 100, "Could not create download: invalid bencode", model.StatusError},
+		// a tracker failure from ANY tracker in the set lands in d.message and
+		// flip-flops as other trackers succeed — it must NOT error the torrent
+		{"tracker message keeps transfer status", 1, 1, 1, 0, 100, "Tracker: [Could not resolve hostname]", model.StatusDownloading},
+		{"tracker message while seeding", 1, 1, 1, 0, 0, "Tracker: [Timeout was reached]", model.StatusSeeding},
+		{"tracker message while inactive", 1, 0, 1, 0, 100, "Tracker: [Timeout was reached]", model.StatusPaused},
+		// a tracker REJECTION (announce answered, body carries a failure reason —
+		// unregistered torrent, banned passkey) is authoritative and typically
+		// permanent on single-tracker private torrents: it stays an error
+		{"tracker rejection is an error", 1, 1, 1, 0, 0, `Tracker: [Failure reason "Unregistered torrent"]`, model.StatusError},
+	}
+	for _, c := range cases {
+		if got := deriveStatus(c.state, c.isActive, c.isOpen, c.isHashCheck, c.left, c.message); got != c.want {
+			t.Errorf("%s: deriveStatus = %q, want %q", c.name, got, c.want)
+		}
+	}
+}

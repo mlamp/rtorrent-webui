@@ -58,7 +58,9 @@
   tabindex="-1"
   onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && detail.open(t.hash)}
 >
-  <div class="gc-stat" style="color:{SEGVAR[t.status]}">{t.status}</div>
+  <div class="gc-stat" style="color:{SEGVAR[t.status]}">
+    {t.status}{#if t.message}<span title={t.message} style="color:{t.status === 'error' ? 'var(--status-error)' : 'var(--status-check)'}"> ⚠</span>{/if}
+  </div>
   <div class="gc-top">
     <span
       class="gc-chk"

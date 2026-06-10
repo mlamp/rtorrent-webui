@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mlamp/rtorrent-webui/internal/model"
 )
@@ -117,11 +118,21 @@ func (m *MockDetail) Trackers(_ context.Context, hash string) ([]model.Tracker, 
 		"https://bgp.technology/announce", "https://empirehost.me/announce",
 		"udp://tracker.opentrackr.org:1337/announce", "https://hd-space.pw/announce",
 	}
-	return []model.Tracker{{
+	now := time.Now().Unix()
+	out := []model.Tracker{{
 		Index: 0, URL: urls[i%len(urls)], Enabled: true, Type: 1,
-		LatestEvent: "completed", Success: int64(3 + i%20),
-	}}, nil
+		LatestEvent: "completed", Success: int64(3 + i%20), SuccessAt: now - 600,
+	}}
+	// every third torrent carries a dead backup tracker (mirrors the real-world
+	// "Tracker: [Could not resolve hostname]" case the failing-state UI exists for)
+	if i%3 == 1 {
+		out = append(out, model.Tracker{
+			Index: 1, URL: "https://dead.invalid/announce", Enabled: true, Type: 1,
+			Failed: int64(4 + i%9), FailedAt: now - 120,
+		})
+	}
+	return out, nil
 }
 
-func (m *MockDetail) SetFilePriority(_ context.Context, _ string, _, _ int) error   { return nil }
+func (m *MockDetail) SetFilePriority(_ context.Context, _ string, _, _ int) error        { return nil }
 func (m *MockDetail) SetTrackerEnabled(_ context.Context, _ string, _ int, _ bool) error { return nil }

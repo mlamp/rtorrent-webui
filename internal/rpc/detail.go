@@ -36,7 +36,7 @@ func multicallRows(c *Client, ctx context.Context, method, hash string, fields .
 var (
 	fileFields    = []string{"f.path=", "f.size_bytes=", "f.completed_chunks=", "f.size_chunks=", "f.priority="}
 	peerFields    = []string{"p.address=", "p.port=", "p.client_version=", "p.down_rate=", "p.up_rate=", "p.completed_percent=", "p.is_encrypted=", "p.is_incoming=", "p.is_snubbed="}
-	trackerFields = []string{"t.url=", "t.is_enabled=", "t.type=", "t.latest_event=", "t.success_counter="}
+	trackerFields = []string{"t.url=", "t.is_enabled=", "t.type=", "t.latest_event=", "t.success_counter=", "t.failed_counter=", "t.failed_time_last=", "t.success_time_last="}
 )
 
 func (c *Client) Files(ctx context.Context, hash string) ([]model.File, error) {
@@ -119,6 +119,9 @@ func decodeTrackers(rows [][]json.RawMessage) []model.Tracker {
 			Type:        int(asIntRaw(r[2])),
 			LatestEvent: trackerEvent(r[3]),
 			Success:     asIntRaw(r[4]),
+			Failed:      asIntRaw(r[5]),
+			FailedAt:    asIntRaw(r[6]),
+			SuccessAt:   asIntRaw(r[7]),
 		})
 	}
 	return out

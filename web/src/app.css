@@ -515,7 +515,9 @@ body {
   margin-bottom: 16px;
 }
 .rd-stat {
-  flex: 1;
+  /* size to content (flex-basis auto), then share leftovers — equal-width
+     boxes (flex-basis 0) ellipsized long values like tracker hosts/paths */
+  flex: 1 1 auto;
   min-width: 88px;
   border: 1px solid var(--line);
   border-radius: 3px;
@@ -614,6 +616,10 @@ body {
 }
 .rd-dot.idle {
   background: var(--dim);
+}
+.rd-dot.err {
+  background: var(--status-error);
+  box-shadow: 0 0 7px var(--status-error);
 }
 .rd-cc {
   display: flex;

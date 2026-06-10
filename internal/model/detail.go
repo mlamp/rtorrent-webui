@@ -2,13 +2,13 @@ package model
 
 // File is one file in a torrent (on-demand detail).
 type File struct {
-	Index          int     `json:"index"`
-	Path           string  `json:"path"`
-	Size           int64   `json:"size"`
-	CompletedChunks int64  `json:"completedChunks"`
-	SizeChunks     int64   `json:"sizeChunks"`
-	Priority       int     `json:"priority"` // 0 off, 1 normal, 2 high
-	Done           float64 `json:"done"`     // 0..1
+	Index           int     `json:"index"`
+	Path            string  `json:"path"`
+	Size            int64   `json:"size"`
+	CompletedChunks int64   `json:"completedChunks"`
+	SizeChunks      int64   `json:"sizeChunks"`
+	Priority        int     `json:"priority"` // 0 off, 1 normal, 2 high
+	Done            float64 `json:"done"`     // 0..1
 }
 
 // Peer is one connected peer (on-demand detail).
@@ -36,7 +36,10 @@ type Pieces struct {
 	ChunkSize       int64  `json:"chunkSize"`
 }
 
-// Tracker is one tracker (on-demand detail).
+// Tracker is one tracker (on-demand detail). Failed/FailedAt/SuccessAt expose
+// per-tracker announce health: rtorrent only keeps the LAST failure message
+// globally (d.message, set by any tracker in the set), so these counters are
+// the only way to show WHICH tracker is erroring.
 type Tracker struct {
 	Index       int    `json:"index"`
 	URL         string `json:"url"`
@@ -44,4 +47,7 @@ type Tracker struct {
 	Type        int    `json:"type"`
 	LatestEvent string `json:"latestEvent"`
 	Success     int64  `json:"success"`
+	Failed      int64  `json:"failed"`
+	FailedAt    int64  `json:"failedAt"`  // unix; 0 = never failed
+	SuccessAt   int64  `json:"successAt"` // unix; 0 = never succeeded
 }
