@@ -169,7 +169,9 @@ func TestRebuildGlobalFromTorrents(t *testing.T) {
 	defer s.Close()
 	const base = 1_700_000_000
 	const MB = 1 << 20
-	s.now = func() int64 { return base + 10_000 }
+	// now far ahead so the rebuild's rollup-catchup window excludes this old fixture
+	// data (this test isolates the reconstruction sum; catch-up is its own test).
+	s.now = func() int64 { return base + 300_000 }
 
 	// raw: AAA at base..base+4 (0,10,20,30,40 MB); BBB appears later at base+2..base+4 (0,5,10 MB).
 	seedTier(t, s, "raw", "AAA", base+4, 1, 5, 10*MB)
@@ -405,6 +407,42 @@ func TestRebuildThenLongRangeFills(t *testing.T) {
 	}
 	if nz < len(ser.Points)/2 {
 		t.Fatalf("rebuilt global should fill the 7d window; only %d/%d nonzero", nz, len(ser.Points))
+	}
+}
+
+// The rebuild rolls the coarse per-torrent tiers up to raw FIRST, so a fresh raw
+// series that the periodic rollup hasn't reached yet still produces a coarse global
+// series up to ~now — no recent gap for the live aggregator to later fill with a
+// sawtooth (the real-world rollup-lag issue seen on deploy).
+func TestRebuildCatchesUpCoarseTiers(t *testing.T) {
+	s, err := New(t.TempDir() + "/catchup.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	now := int64(base + 900)
+	s.now = func() int64 { return now }
+	// 15 min of raw per-torrent data; the coarse tiers have NOT rolled up yet.
+	seedTier(t, s, "raw", "AAA", now, 1, 900, 1<<20)
+	if tierCount(t, s, "1m") != 0 {
+		t.Fatal("precondition: 1m tier should be empty (rollup lag)")
+	}
+
+	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// rebuild rolled raw→1m before reconstructing → 1m global populated, reaching ~now.
+	var n, maxTS int64
+	if err := s.db.QueryRow(`SELECT COUNT(*), COALESCE(MAX(ts),0) FROM samples WHERE res='1m' AND hash=''`).Scan(&n, &maxTS); err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("rebuild must catch the 1m tier up to raw; got no 1m global rows")
+	}
+	if maxTS < now-120 {
+		t.Fatalf("1m global reaches only @%d, want within ~1min of now=%d (catch-up)", maxTS, now)
 	}
 }
 

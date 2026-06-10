@@ -399,6 +399,19 @@ func (s *Store) RebuildGlobalFromTorrents(ctx context.Context) (int, error) {
 		}
 	}()
 
+	// Catch the coarse per-torrent tiers up to raw first — the periodic rollup may lag
+	// by its interval, which would otherwise leave the rebuilt global series missing
+	// the most recent rollup-window of coarse data (a sawtooth where the live aggregator
+	// later fills it). Inside the tx: the held connection also blocks the background
+	// maintain()/GC for the rebuild's duration, so it can't prune per-torrent rows
+	// mid-reconstruction.
+	now := s.now()
+	for _, r := range rollups {
+		if _, err := tx.ExecContext(ctx, rollupSamplesSQL, r.dst, r.bucket, r.bucket, r.bucket, r.src, now-r.window); err != nil {
+			return 0, err
+		}
+	}
+
 	ins, err := tx.PrepareContext(ctx, `INSERT INTO samples(res,hash,ts,down,up) VALUES(?,'',?,?,?)`)
 	if err != nil {
 		return 0, err
@@ -507,17 +520,23 @@ func (s *Store) maintainLoop() {
 	}
 }
 
+// rollupSamplesSQL rolls one resolution tier up to the next: keep the LAST cumulative
+// value per destination bucket (floor ts to the bucket), over a bounded recent window.
+// Shared by the periodic maintain() and the rebuild hatch (which catches the coarse
+// per-torrent tiers up to raw before reconstructing the global series). Bind order:
+// dst, bucket, bucket, bucket, src, fromTS.
+const rollupSamplesSQL = `
+	INSERT OR REPLACE INTO samples(res,hash,ts,down,up)
+	SELECT ?, hash, (ts/?)*?, down, up FROM (
+		SELECT hash, ts, down, up,
+		       ROW_NUMBER() OVER (PARTITION BY hash, ts/? ORDER BY ts DESC) AS rn
+		FROM samples WHERE res=? AND ts >= ?
+	) WHERE rn = 1`
+
 func (s *Store) maintain() {
 	now := s.now()
 	for _, r := range rollups {
-		s.db.Exec(`
-			INSERT OR REPLACE INTO samples(res,hash,ts,down,up)
-			SELECT ?, hash, (ts/?)*?, down, up FROM (
-				SELECT hash, ts, down, up,
-				       ROW_NUMBER() OVER (PARTITION BY hash, ts/? ORDER BY ts DESC) AS rn
-				FROM samples WHERE res=? AND ts >= ?
-			) WHERE rn = 1`,
-			r.dst, r.bucket, r.bucket, r.bucket, r.src, now-r.window)
+		s.db.Exec(rollupSamplesSQL, r.dst, r.bucket, r.bucket, r.bucket, r.src, now-r.window)
 	}
 	for _, t := range tiers {
 		s.db.Exec(`DELETE FROM samples WHERE res=? AND ts < ?`, t.res, now-t.retain)
