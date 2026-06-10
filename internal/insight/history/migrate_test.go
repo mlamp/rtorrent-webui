@@ -29,8 +29,8 @@ func TestMigrateFreshDB(t *testing.T) {
 	}
 	// new-schema column exists -> a Sample/Query round-trips
 	s.now = func() int64 { return 1001 }
-	s.Sample(nil, model.Globals{DownTotal: 0}, 1000)
-	s.Sample(nil, model.Globals{DownTotal: 1 << 20}, 1001)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 0}}, model.Globals{}, 1000)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 << 20}}, model.Globals{}, 1001)
 	ser, err := s.Query(context.Background(), 900, "")
 	if err != nil {
 		t.Fatalf("query on fresh db: %v", err)
@@ -260,5 +260,46 @@ func TestMigrateV4ClearsStaleGlobalRows(t *testing.T) {
 	}
 	if count("raw", "AAA") != 1 {
 		t.Fatal("v4 must not touch per-torrent rows")
+	}
+}
+
+// Migration v5 bumps the schema version and creates the meta key/value table.
+func TestMigrateV5CreatesMetaTable(t *testing.T) {
+	s, err := New(t.TempDir() + "/v5.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meta'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatal("v5 must create the meta table")
+	}
+}
+
+// The rebuild hatch stamps meta('global_rebuilt_at') with s.now().
+func TestRebuildRecordsMetaTimestamp(t *testing.T) {
+	s, err := New(t.TempDir() + "/meta.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	s.now = func() int64 { return base + 42 }
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 << 20}}, model.Globals{}, base)
+	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	if err := s.db.QueryRow(`SELECT value FROM meta WHERE key='global_rebuilt_at'`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != base+42 {
+		t.Fatalf("global_rebuilt_at = %d, want %d", got, base+42)
 	}
 }

@@ -38,6 +38,7 @@ func main() {
 	historyDB := flag.String("history-db", "", "override insight.history_db")
 	diskDirs := flag.String("disk-dirs", "", "override downloads.dirs (comma-separated)")
 	mock := flag.Int("mock", 0, "serve N synthetic torrents instead of rtorrent (load testing)")
+	rebuildHistory := flag.Bool("rebuild-history", false, "reconstruct the global '' history series from the per-torrent series, then exit (one-time data hatch)")
 	flag.Parse()
 
 	cfg := config.Default()
@@ -127,8 +128,22 @@ func main() {
 			logger.Printf("geoip disabled: %v", err)
 		}
 	}
+	if *rebuildHistory && cfg.Insight.HistoryDB == "" {
+		logger.Fatal("-rebuild-history needs a history DB (set insight.history_db or -history-db)")
+	}
 	if cfg.Insight.HistoryDB != "" {
 		if h, err := history.New(cfg.Insight.HistoryDB); err == nil {
+			// One-time data hatch: rebuild the global series from per-torrent rows and
+			// exit, before the poll loop / server start.
+			if *rebuildHistory {
+				n, rerr := h.RebuildGlobalFromTorrents(context.Background())
+				if rerr != nil {
+					logger.Fatalf("rebuild-history: %v", rerr)
+				}
+				logger.Printf("rebuild-history: wrote %d global rows from per-torrent series; exiting", n)
+				_ = h.Close()
+				os.Exit(0)
+			}
 			histStore = h
 			srv.SetHistory(h)
 			// One combined sink per tick: cumulative transfer counters + system gauges.

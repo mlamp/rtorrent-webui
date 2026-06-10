@@ -90,7 +90,7 @@ type Store struct {
 
 // schemaVersion is the version this build expects; New() applies every
 // migration up to it. Bump it and append a migration when the schema changes.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // migration mutates the schema from version-1 to its version, inside a tx.
 type migration struct {
@@ -169,6 +169,15 @@ var migrations = []migration{
 		// re-accumulates. Per-torrent ('AAA'…) rows are untouched. (Migration logic is
 		// frozen once released — do not edit.)
 		_, err := tx.Exec(`DELETE FROM samples WHERE hash='' AND res IN ('raw','1m')`)
+		return err
+	}},
+	{5, "meta table for data-version markers", func(tx *sql.Tx) error {
+		// A tiny key/value table to record data-model operations — e.g. the
+		// global-series-from-torrents rebuild stamps 'global_rebuilt_at'. Separate
+		// from PRAGMA user_version (owned by these schema migrations). Released
+		// alongside the global "" series becoming Σ per-torrent (see Sample), which
+		// the manual -rebuild-history hatch makes consistent across all history.
+		_, err := tx.Exec(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`)
 		return err
 	}},
 }
@@ -323,16 +332,21 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 		}
 	}
 
-	// Global "" series = the session throttle totals (network bytes incl. protocol
-	// overhead). This is a real cumulative counter, so dedup + rollup + derive all work
-	// the same as the per-torrent series. (An earlier build briefly stored a payload
-	// running counter here; that changed units mid-stream and was incompatible with
-	// existing history, so it was reverted — the reactive payload "sum of torrents"
-	// now lives in the live sidebar buffer instead.)
-	write("", g.DownTotal, g.UpTotal)
+	// Global "" series = the SUM of the per-torrent cumulative counters (payload
+	// down/up), NOT throttle.global_*.total. Recomputed from the torrent list each
+	// tick, so it's stateless and restart-stable: Σ d.completed_bytes survives an
+	// rtorrent restart, whereas the throttle session totals reset to 0. It also matches
+	// the live sidebar's "sum of all torrents". Add/remove-torrent jumps in the sum are
+	// non-traffic discontinuities, clamped at query time by the rate cap (resampleGrid).
+	// The -rebuild-history hatch reconstructs this same Σ for historical rows, so live
+	// and reconstructed history are one coherent counter.
+	var sumDown, sumUp int64
 	for _, t := range torrents {
+		sumDown += t.Completed
+		sumUp += t.UpTotal
 		write(t.Hash, t.Completed, t.UpTotal)
 	}
+	write("", sumDown, sumUp)
 
 	// Record first sight *immediately* (unthrottled): first_seen must be the exact
 	// first-sample ts, since FirstTS uses it to gate the UI's time-range buttons.
@@ -359,6 +373,97 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 		}
 	}
 	ok = true
+}
+
+// RebuildGlobalFromTorrents reconstructs the global "" series in every tier as the
+// running carry-forward SUM of the per-torrent cumulative counters — so the long-range
+// global graphs can be backfilled from the (intact) per-torrent history after the
+// global series was lost. Idempotent: it DELETEs the existing "" rows per tier and
+// rebuilds them, so it's safe to re-run. Per-torrent rows are never touched. Returns
+// the total number of "" rows written and stamps meta 'global_rebuilt_at'.
+//
+// Each tier is rebuilt independently from its own per-torrent rows: rollups are
+// per-hash and floor timestamps, so a tier's "" must be the sum of THAT tier's rows.
+// A per-torrent reset (re-hash) shows as a negative running delta and a removed
+// torrent as a drop — both clamp to 0 at query time; a torrent first seen already
+// part-done adds its full value (a moderate one-bucket bump in coarse views).
+func (s *Store) RebuildGlobalFromTorrents(ctx context.Context) (int, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	ins, err := tx.PrepareContext(ctx, `INSERT INTO samples(res,hash,ts,down,up) VALUES(?,'',?,?,?)`)
+	if err != nil {
+		return 0, err
+	}
+	defer ins.Close()
+
+	type emit struct{ ts, down, up int64 }
+	written := 0
+	for _, t := range tiers {
+		res := t.res
+		if _, err := tx.ExecContext(ctx, `DELETE FROM samples WHERE res=? AND hash=''`, res); err != nil {
+			return 0, err
+		}
+		// Stream this tier's per-torrent rows, accumulating ONE global emit per distinct
+		// ts = Σ over torrents of each torrent's last value ≤ ts. Collect emits first
+		// (O(distinct ts), small) then insert — a single SQLite conn can't write while
+		// a Rows iterator is open.
+		rows, err := tx.QueryContext(ctx, `SELECT hash, ts, down, up FROM samples WHERE res=? AND hash<>'' ORDER BY ts, hash`, res)
+		if err != nil {
+			return 0, err
+		}
+		var emits []emit
+		cur := map[string][2]int64{}
+		var sumD, sumU, curTS int64
+		have := false
+		for rows.Next() {
+			var h string
+			var rts, d, u int64
+			if err := rows.Scan(&h, &rts, &d, &u); err != nil {
+				rows.Close()
+				return 0, err
+			}
+			if have && rts != curTS {
+				emits = append(emits, emit{curTS, sumD, sumU})
+			}
+			prev := cur[h] // {0,0} if absent → first sight adds the full value
+			sumD += d - prev[0]
+			sumU += u - prev[1]
+			cur[h] = [2]int64{d, u}
+			curTS, have = rts, true
+		}
+		if cerr := rows.Err(); cerr != nil {
+			rows.Close()
+			return 0, cerr
+		}
+		rows.Close()
+		if have {
+			emits = append(emits, emit{curTS, sumD, sumU})
+		}
+		for _, e := range emits {
+			if _, err := ins.ExecContext(ctx, res, e.ts, e.down, e.up); err != nil {
+				return 0, err
+			}
+			written++
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO meta(key,value) VALUES('global_rebuilt_at', ?)`, s.now()); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	committed = true
+	return written, nil
 }
 
 // SampleGauges records instantaneous gauge values (cpu/load/mem/peers/session

@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/mlamp/rtorrent-webui/internal/model"
@@ -38,6 +39,16 @@ func seedTier(t *testing.T, s *Store, res, hash string, endTS, step, n, perStep 
 			t.Fatal(err)
 		}
 	}
+}
+
+// globalAt reads the reconstructed/live global ("") cumulative row for a tier at a ts.
+func globalAt(t *testing.T, s *Store, res string, ts int64) (int64, int64) {
+	t.Helper()
+	var d, u int64
+	if err := s.db.QueryRow(`SELECT down, up FROM samples WHERE res=? AND hash='' AND ts=?`, res, ts).Scan(&d, &u); err != nil {
+		t.Fatalf("no global %s row @%d: %v", res, ts, err)
+	}
+	return d, u
 }
 
 // Each range must select the resolution tier whose bucket suits it, and the grid
@@ -146,6 +157,257 @@ func TestFallbackToFinerTierStaysBounded(t *testing.T) {
 	}
 }
 
+// RebuildGlobalFromTorrents reconstructs "" per tier as the carry-forward Σ of the
+// per-torrent series: one "" row per distinct ts = sum of each torrent's last value
+// ≤ that ts. Exercises a staggered appearance (raw) and two torrents sharing a
+// bucket ts (1h).
+func TestRebuildGlobalFromTorrents(t *testing.T) {
+	s, err := New(t.TempDir() + "/rebuild.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	const MB = 1 << 20
+	s.now = func() int64 { return base + 10_000 }
+
+	// raw: AAA at base..base+4 (0,10,20,30,40 MB); BBB appears later at base+2..base+4 (0,5,10 MB).
+	seedTier(t, s, "raw", "AAA", base+4, 1, 5, 10*MB)
+	seedTier(t, s, "raw", "BBB", base+4, 1, 3, 5*MB)
+	// 1h: AAA & BBB share bucket ts base-7200/base-3600/base.
+	seedTier(t, s, "1h", "AAA", base, 3600, 3, 100*MB)
+	seedTier(t, s, "1h", "BBB", base, 3600, 3, 50*MB)
+
+	n, err := s.RebuildGlobalFromTorrents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 8 { // 5 distinct raw ts + 3 distinct 1h ts
+		t.Fatalf("wrote %d global rows, want 8", n)
+	}
+
+	// raw carry-forward sum (BBB carries forward / is absent before base+2)
+	for _, w := range []struct{ ts, down int64 }{
+		{base, 0}, {base + 1, 10 * MB}, {base + 2, 20 * MB}, {base + 3, 35 * MB}, {base + 4, 50 * MB},
+	} {
+		if d, u := globalAt(t, s, "raw", w.ts); d != w.down || u != w.down/2 {
+			t.Errorf("raw ''@%d = %d/%d, want %d/%d", w.ts, d, u, w.down, w.down/2)
+		}
+	}
+	// 1h shared-ts sum
+	if d, _ := globalAt(t, s, "1h", base); d != 300*MB {
+		t.Errorf("1h ''@base = %d, want %d", d, 300*MB)
+	}
+	if d, _ := globalAt(t, s, "1h", base-3600); d != 150*MB {
+		t.Errorf("1h ''@base-3600 = %d, want %d", d, 150*MB)
+	}
+	// exactly one "" row per (res,ts)
+	var dups int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM (SELECT res,ts FROM samples WHERE hash='' GROUP BY res,ts HAVING COUNT(*)>1)`).Scan(&dups); err != nil {
+		t.Fatal(err)
+	}
+	if dups != 0 {
+		t.Fatalf("%d duplicate (res,ts) global rows", dups)
+	}
+}
+
+// Rebuild is idempotent (running it twice yields identical "" rows) and never touches
+// per-torrent rows.
+func TestRebuildIdempotent(t *testing.T) {
+	s, err := New(t.TempDir() + "/idem.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	s.now = func() int64 { return base + 100 }
+	seedTier(t, s, "raw", "AAA", base+4, 1, 5, 1<<20)
+	seedTier(t, s, "raw", "BBB", base+4, 1, 5, 2<<20)
+	aaaBefore := rawCount(t, s, "AAA")
+
+	snap := func() string {
+		rows, err := s.db.Query(`SELECT res,ts,down,up FROM samples WHERE hash='' ORDER BY res,ts`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var res string
+			var ts, d, u int64
+			rows.Scan(&res, &ts, &d, &u)
+			out = append(out, fmt.Sprintf("%s,%d,%d,%d", res, ts, d, u))
+		}
+		return fmt.Sprint(out)
+	}
+	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := snap()
+	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if second := snap(); second != first {
+		t.Fatalf("rebuild not idempotent:\n first=%s\nsecond=%s", first, second)
+	}
+	if rawCount(t, s, "AAA") != aaaBefore {
+		t.Fatal("rebuild altered per-torrent rows")
+	}
+}
+
+// Rebuild DELETES stale global rows (e.g. left from a different counter) rather than
+// merging — proving the full-rebuild, not gap-fill, behaviour.
+func TestRebuildDeletesStaleGlobalRows(t *testing.T) {
+	s, err := New(t.TempDir() + "/stale.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	s.now = func() int64 { return base + 100 }
+	seedTier(t, s, "raw", "AAA", base+4, 1, 5, 1<<20)
+	// a bogus "" row at a ts the rebuild won't produce
+	if _, err := s.db.Exec(`INSERT INTO samples(res,hash,ts,down,up) VALUES('raw','',?,?,?)`, base+999, 123456789, 123456789); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	s.db.QueryRow(`SELECT COUNT(*) FROM samples WHERE res='raw' AND hash='' AND down=123456789`).Scan(&n)
+	if n != 0 {
+		t.Fatalf("stale global row survived rebuild (%d rows) — must DELETE not merge", n)
+	}
+}
+
+// A per-torrent reset (re-hash drops the counter) shows as the running sum dipping;
+// at query time that negative delta clamps to 0 (no spike).
+func TestRebuildHandlesReset(t *testing.T) {
+	s, err := New(t.TempDir() + "/reset.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	const MB = 1 << 20
+	s.now = func() int64 { return base + 30 }
+	// AAA cumulative 0,10,20 then RESET to 5, then 6 MB.
+	for i, v := range []int64{0, 10, 20, 5, 6} {
+		if _, err := s.db.Exec(`INSERT INTO samples(res,hash,ts,down,up) VALUES('raw','AAA',?,?,?)`, base+int64(i), v*MB, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// "" cumulative mirrors the running sum incl. the dip
+	if d, _ := globalAt(t, s, "raw", base+2); d != 20*MB {
+		t.Errorf("'' @base+2 = %d, want %d", d, 20*MB)
+	}
+	if d, _ := globalAt(t, s, "raw", base+3); d != 5*MB {
+		t.Errorf("'' @base+3 (reset) = %d, want %d", d, 5*MB)
+	}
+	// query derives no negative rate across the reset
+	ser, _ := s.Query(context.Background(), 30, "")
+	for _, p := range ser.Points {
+		if p.Down < 0 {
+			t.Fatalf("negative rate after reconstructed reset: %+v", p)
+		}
+	}
+}
+
+// Rebuild with no per-torrent rows clears all "" rows and reports 0 written.
+func TestRebuildEmptySet(t *testing.T) {
+	s, err := New(t.TempDir() + "/empty.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	s.now = func() int64 { return base }
+	s.db.Exec(`INSERT INTO samples(res,hash,ts,down,up) VALUES('raw','',?,?,?)`, base, 9, 9)
+	n, err := s.RebuildGlobalFromTorrents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("wrote %d rows, want 0 (no per-torrent data)", n)
+	}
+	if rawCount(t, s, "") != 0 {
+		t.Fatal("stale global rows must be cleared even when nothing to rebuild")
+	}
+}
+
+// Live Sample() writes the global "" as the SUM of the tick's per-torrent counters,
+// NOT g.DownTotal/UpTotal; an added (large) torrent's jump clamps at query time.
+func TestSampleGlobalIsSumOfTorrents(t *testing.T) {
+	s, err := New(t.TempDir() + "/sum.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	const MB = 1 << 20
+	s.now = func() int64 { return base + 30 }
+
+	s.Sample([]model.Torrent{
+		{Hash: "A", Completed: 3 * MB, UpTotal: 1 * MB},
+		{Hash: "B", Completed: 7 * MB, UpTotal: 2 * MB},
+	}, model.Globals{DownTotal: 999, UpTotal: 999}, base)
+	if d, u := globalAt(t, s, "raw", base); d != 10*MB || u != 3*MB {
+		t.Fatalf("'' = %d/%d, want sum 10/3 MiB (NOT g.DownTotal=999)", d, u)
+	}
+
+	// next tick: A grows a little, and a large torrent C appears → sum jumps ~20 GiB.
+	s.Sample([]model.Torrent{
+		{Hash: "A", Completed: 4 * MB, UpTotal: 1 * MB},
+		{Hash: "B", Completed: 7 * MB, UpTotal: 2 * MB},
+		{Hash: "C", Completed: 20 << 30, UpTotal: 0},
+	}, model.Globals{}, base+1)
+	ser, _ := s.Query(context.Background(), 30, "")
+	for _, p := range ser.Points {
+		if p.Down > 1<<30 { // the 20 GiB add must clamp, not render as tens of GB/s
+			t.Fatalf("add-torrent jump not clamped: %d B/s @%d", p.Down, p.TS)
+		}
+	}
+}
+
+// End-to-end: rebuild the global from per-torrent 1h data, then a 7d Query fills.
+func TestRebuildThenLongRangeFills(t *testing.T) {
+	s, err := New(t.TempDir() + "/e2e.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	now := int64(base + 8*86400)
+	s.now = func() int64 { return now }
+	// three torrents, each 7d of 1h data; global "" left empty.
+	seedTier(t, s, "1h", "AAA", now, 3600, 168, 5<<20)
+	seedTier(t, s, "1h", "BBB", now, 3600, 168, 3<<20)
+	seedTier(t, s, "1h", "CCC", now, 3600, 168, 1<<20)
+
+	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ser, err := s.Query(context.Background(), 604800, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ser.Step != 3600 {
+		t.Fatalf("7d step=%d, want 3600", ser.Step)
+	}
+	nz := 0
+	for _, p := range ser.Points {
+		if p.Down > 0 {
+			nz++
+		}
+	}
+	if nz < len(ser.Points)/2 {
+		t.Fatalf("rebuilt global should fill the 7d window; only %d/%d nonzero", nz, len(ser.Points))
+	}
+}
+
 // FirstTS must report the exact first-sight ts even when the seen-refresh would be
 // throttled (process already running >60s) and a rollup has stamped bucket-floored
 // rows into the coarse tiers. Regression for the "reports a time before the torrent
@@ -189,17 +451,17 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	const base = 1_700_000_000
 	s.now = func() int64 { return base + 13 }
 
-	// Global "" series = throttle totals (cumulative): +1 MiB/s down, +512 KiB/s up
-	// for 11 ticks.
+	// Global "" series = Σ per-torrent. One torrent climbing +1 MiB/s down,
+	// +512 KiB/s up for 11 ticks drives it.
 	for i := 0; i <= 10; i++ {
-		s.Sample(nil, model.Globals{DownTotal: int64(i) << 20, UpTotal: int64(i) * (512 << 10)}, base+int64(i))
+		s.Sample([]model.Torrent{{Hash: "AAA", Completed: int64(i) << 20, UpTotal: int64(i) * (512 << 10)}}, model.Globals{}, base+int64(i))
 	}
 	if got := rawCount(t, s, ""); got != 11 {
 		t.Fatalf("raw global rows = %d, want 11", got)
 	}
 
 	// Dedup: an unchanged counter must NOT add a row.
-	s.Sample(nil, model.Globals{DownTotal: 10 << 20, UpTotal: 10 * (512 << 10)}, base+11)
+	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 10 << 20, UpTotal: 10 * (512 << 10)}}, model.Globals{}, base+11)
 	if got := rawCount(t, s, ""); got != 11 {
 		t.Fatalf("after unchanged sample, raw rows = %d, want 11 (dedup)", got)
 	}
@@ -227,7 +489,7 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	}
 
 	// Counter reset must clamp to 0 (no negative spike).
-	s.Sample(nil, model.Globals{DownTotal: 0, UpTotal: 0}, base+12)
+	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 0, UpTotal: 0}}, model.Globals{}, base+12)
 	ser, _ = s.Query(context.Background(), 30, "")
 	for _, p := range ser.Points {
 		if p.Down < 0 || p.Up < 0 {
@@ -260,7 +522,7 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 
 // Idle gaps must read as 0 across the whole gap and the resume rate must land at its
 // real time slot — the core of the windowed grid resample. Drives the global ""
-// series via throttle totals: active for 2s, idle ~2min, then active.
+// series via one torrent: active for 2s, idle ~2min, then active.
 func TestIdleGapZeroFill(t *testing.T) {
 	s, err := New(t.TempDir() + "/gap.db")
 	if err != nil {
@@ -273,11 +535,11 @@ func TestIdleGapZeroFill(t *testing.T) {
 	s.now = func() int64 { return base + 121 }
 
 	// Active 0..2 (cumulative 0,1,2 MB), idle 3..119 (no samples), resume 120..121.
-	s.Sample(nil, model.Globals{DownTotal: 0}, base+0)
-	s.Sample(nil, model.Globals{DownTotal: 1 * MB}, base+1)
-	s.Sample(nil, model.Globals{DownTotal: 2 * MB}, base+2)
-	s.Sample(nil, model.Globals{DownTotal: 3 * MB}, base+120)
-	s.Sample(nil, model.Globals{DownTotal: 4 * MB}, base+121)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 0}}, model.Globals{}, base+0)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 * MB}}, model.Globals{}, base+1)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 2 * MB}}, model.Globals{}, base+2)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 3 * MB}}, model.Globals{}, base+120)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 4 * MB}}, model.Globals{}, base+121)
 
 	// range 130s → raw tier, step 1, grid [base-9, base+121] = 131 slots (< target, no decimation).
 	ser, err := s.Query(context.Background(), 130, "")
@@ -370,8 +632,8 @@ func TestQueryClampsStartToFirstSeen(t *testing.T) {
 	s.now = func() int64 { return now }
 
 	// AAA first observed only 5 min ago, with global "" throttle data alongside.
-	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 0}}, model.Globals{DownTotal: 0}, now-300)
-	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 10 << 20}}, model.Globals{DownTotal: 5 << 20}, now-1)
+	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 0}}, model.Globals{}, now-300)
+	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 10 << 20}}, model.Globals{}, now-1)
 
 	per, err := s.Query(context.Background(), 3600, "AAA") // 1h range, only 5min of history
 	if err != nil {
@@ -407,9 +669,9 @@ func TestNoSpuriousSpikeAtFirstSample(t *testing.T) {
 
 	// First sample already at 100 MiB (e.g. a fresh history DB for a long-running
 	// rtorrent), then a real ~1 MiB/s for a few ticks.
-	s.Sample(nil, model.Globals{DownTotal: 100 * MB}, base+10)
-	s.Sample(nil, model.Globals{DownTotal: 101 * MB}, base+11)
-	s.Sample(nil, model.Globals{DownTotal: 102 * MB}, base+12)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 100 * MB}}, model.Globals{}, base+10)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 101 * MB}}, model.Globals{}, base+11)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 102 * MB}}, model.Globals{}, base+12)
 
 	ser, err := s.Query(context.Background(), 60, "")
 	if err != nil {
@@ -452,10 +714,10 @@ func TestNoSpikeOnCounterRebaseline(t *testing.T) {
 
 	// Old baseline counter climbing at a real ~1 MiB/s, then a restart/version change
 	// RE-BASELINES it by +168 GB in one step, then real ~1 MiB/s resumes.
-	s.Sample(nil, model.Globals{DownTotal: 10 * GB}, base+5)
-	s.Sample(nil, model.Globals{DownTotal: 10*GB + MB}, base+6)
-	s.Sample(nil, model.Globals{DownTotal: 178 * GB}, base+10)      // +168 GB step (re-baseline)
-	s.Sample(nil, model.Globals{DownTotal: 178*GB + MB}, base+11)   // real ~1 MiB/s again
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 10 * GB}}, model.Globals{}, base+5)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 10*GB + MB}}, model.Globals{}, base+6)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 178 * GB}}, model.Globals{}, base+10)    // +168 GB step (re-baseline)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 178*GB + MB}}, model.Globals{}, base+11) // real ~1 MiB/s again
 
 	ser, err := s.Query(context.Background(), 20, "")
 	if err != nil {
