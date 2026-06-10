@@ -13,6 +13,7 @@ import (
 
 	"github.com/mlamp/rtorrent-webui/internal/insight/history"
 	"github.com/mlamp/rtorrent-webui/internal/insight/search"
+	"github.com/mlamp/rtorrent-webui/internal/model"
 	"github.com/mlamp/rtorrent-webui/internal/rpc"
 	"github.com/mlamp/rtorrent-webui/internal/scgi"
 	"github.com/mlamp/rtorrent-webui/internal/sse"
@@ -24,10 +25,13 @@ import (
 var Version = "dev"
 
 type Server struct {
-	hub     *sse.Hub
-	rpc     *rpc.Client
-	detail  DetailRPC // detail-tab data source (defaults to rpc; swapped in -mock mode)
-	view    string
+	hub    *sse.Hub
+	rpc    *rpc.Client
+	detail DetailRPC // detail-tab data source (defaults to rpc; swapped in -mock mode)
+	// source, when set (-mock mode), feeds the torrents/stats/health endpoints
+	// instead of dialing rtorrent — same shape as poll.Source / rpc.Client.Poll.
+	source func(context.Context) ([]model.Torrent, model.Globals, error)
+	view   string
 	geo     GeoLookup
 	dirs    []string
 	history *history.Store
@@ -52,6 +56,23 @@ func New(hub *sse.Hub, r *rpc.Client, view string) *Server {
 // SetDetailRPC overrides the source for the detail tabs (files/peers/trackers/
 // pieces). Used by -mock mode so the detail view works without a live rtorrent.
 func (s *Server) SetDetailRPC(d DetailRPC) { s.detail = d }
+
+// SetSource overrides the torrents/stats/health data source. Used by -mock mode
+// so /healthz, /api/torrents and /api/stats serve synthetic data instead of
+// dialing the absent rtorrent socket (which otherwise burns the dial-retry
+// budget and 503s). Without it those endpoints go to the live rtorrent client.
+func (s *Server) SetSource(src func(context.Context) ([]model.Torrent, model.Globals, error)) {
+	s.source = src
+}
+
+// poll returns the current torrents+globals from the mock source when one is
+// set (-mock mode), otherwise from the live rtorrent client.
+func (s *Server) poll(ctx context.Context) ([]model.Torrent, model.Globals, error) {
+	if s.source != nil {
+		return s.source(ctx)
+	}
+	return s.rpc.Poll(ctx, s.view)
+}
 
 func (s *Server) Handler() http.Handler { return s.mux }
 
@@ -98,6 +119,10 @@ func writeRPCErr(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	if s.source != nil { // -mock mode: no daemon to probe, always healthy
+		writeOK(w, map[string]bool{"ok": true})
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
 	if _, err := s.rpc.APIVersion(ctx); err != nil {
@@ -118,7 +143,7 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	torrents, globals, err := s.rpc.Poll(ctx, s.view)
+	torrents, globals, err := s.poll(ctx)
 	if err != nil {
 		writeRPCErr(w, err)
 		return
@@ -129,7 +154,7 @@ func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	_, globals, err := s.rpc.Poll(ctx, s.view)
+	_, globals, err := s.poll(ctx)
 	if err != nil {
 		writeRPCErr(w, err)
 		return

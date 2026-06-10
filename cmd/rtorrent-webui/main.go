@@ -97,6 +97,7 @@ func main() {
 	srv.SetDirs(cfg.Downloads.Dirs)
 	if *mock > 0 {
 		srv.SetDetailRPC(poll.NewMockDetail()) // detail tabs work without a live rtorrent
+		srv.SetSource(src)                     // /healthz + /api/torrents + /api/stats serve mock data too
 	}
 
 	if cfg.Insight.GeoIPDB != "" {
