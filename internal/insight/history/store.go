@@ -470,6 +470,11 @@ func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) (Series
 		rangeSecs = 3600
 	}
 	idx, target := pickTier(rangeSecs)
+	// The grid step is dictated by the RANGE (the chosen tier's bucket), NOT by which
+	// tier we end up reading. This keeps the grid bounded (~range/step slots) even when
+	// we fall back to a finer tier — otherwise a 7d/1y request that falls back to raw
+	// would build a 600k / 31M-point grid at step=1.
+	step := tiers[idx].bucket
 	now := s.now()
 	start, end := now-rangeSecs, now
 	// Never draw a grid that predates the torrent's first-seen sample — leading
@@ -482,12 +487,12 @@ func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) (Series
 	}
 
 	for i := idx; i >= 0; i-- {
-		step := tiers[i].bucket
 		samples, err := s.fetchSamples(ctx, tierOrder[i], hash, start, step)
 		if err != nil {
 			return Series{}, err
 		}
-		// Use this tier once it actually holds data, else fall to a finer one. The
+		// Read this tier's samples once it actually holds data, else fall to a finer
+		// one (finer data resamples fine onto the coarser grid via carry-forward). The
 		// finest tier (i==0) is the floor: resample whatever it has — possibly an
 		// all-zero grid, the honest answer for a brand-new or idle series.
 		if len(samples) >= 2 || i == 0 {
@@ -495,7 +500,7 @@ func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) (Series
 			return Series{Start: start, End: end, Step: step, Points: decimate(pts, target)}, nil
 		}
 	}
-	return Series{Start: start, End: end, Step: tiers[0].bucket}, nil // unreachable
+	return Series{Start: start, End: end, Step: step}, nil // unreachable
 }
 
 // fetchSamples returns the stored cumulative samples for (res,hash) covering

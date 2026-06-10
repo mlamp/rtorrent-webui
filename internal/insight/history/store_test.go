@@ -24,6 +24,128 @@ func tierCount(t *testing.T, s *Store, res string) int {
 	return n
 }
 
+// seedTier inserts a continuous, monotonically-climbing cumulative series into one
+// resolution tier: `n` rows spaced `step` seconds apart ending at `endTS`, each
+// adding `perStep` bytes down (up = half). Lets tests build realistic multi-tier
+// fixtures (raw/1m/1h/1d) without waiting on the rollup. `perStep`/`step` must stay
+// well under the rate cap so genuine data isn't clamped.
+func seedTier(t *testing.T, s *Store, res, hash string, endTS, step, n, perStep int64) {
+	t.Helper()
+	for i := int64(0); i < n; i++ {
+		ts := endTS - (n-1-i)*step
+		v := i * perStep
+		if _, err := s.db.Exec(`INSERT INTO samples(res,hash,ts,down,up) VALUES(?,?,?,?,?)`, res, hash, ts, v, v/2); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Each range must select the resolution tier whose bucket suits it, and the grid
+// step must come from the RANGE (so the grid stays bounded), regardless of fallback.
+// With every tier fully populated, every range fills its window.
+func TestStepMatchesRangeAndFills(t *testing.T) {
+	s, err := New(t.TempDir() + "/tiers.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	now := int64(base + 400*86400) // far enough that 1y of 1d data fits
+	s.now = func() int64 { return now }
+
+	seedTier(t, s, "raw", "", now, 1, 900, 1<<10)    // 15m of raw
+	seedTier(t, s, "1m", "", now, 60, 1440, 1<<16)   // 24h of 1m
+	seedTier(t, s, "1h", "", now, 3600, 168, 1<<24)  // 7d of 1h
+	seedTier(t, s, "1d", "", now, 86400, 366, 1<<30) // ~1y of 1d
+
+	cases := []struct {
+		secs, wantStep int64
+	}{
+		{900, 1}, {3600, 60}, {21600, 60}, {86400, 60}, {604800, 3600}, {31536000, 86400},
+	}
+	for _, c := range cases {
+		ser, err := s.Query(context.Background(), c.secs, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ser.Step != c.wantStep {
+			t.Errorf("range %ds: step=%d, want %d", c.secs, ser.Step, c.wantStep)
+		}
+		if slots := (ser.End - ser.Start) / ser.Step; slots > 2000 {
+			t.Errorf("range %ds: %d grid slots — unbounded (step not from range?)", c.secs, slots)
+		}
+		nz := 0
+		for _, p := range ser.Points {
+			if p.Down > 0 {
+				nz++
+			}
+		}
+		if nz < len(ser.Points)/2 {
+			t.Errorf("range %ds: only %d/%d slots nonzero — should fill from full data", c.secs, nz, len(ser.Points))
+		}
+	}
+}
+
+// When the range's tier is empty but a finer tier has data (right after a restart or
+// a history trim, before coarse tiers roll up), the query falls back to the finer
+// tier's SAMPLES but still grids at the RANGE's step — so the grid stays bounded
+// (~hundreds of points, never 600k/31M) and the available data still renders.
+func TestFallbackToFinerTierStaysBounded(t *testing.T) {
+	s, err := New(t.TempDir() + "/fallback.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	now := int64(base + 7*86400)
+	s.now = func() int64 { return now }
+
+	// Only the raw tier holds data (15 min) — coarse tiers empty.
+	seedTier(t, s, "raw", "", now, 1, 900, 1<<20)
+
+	for _, c := range []struct {
+		name     string
+		secs     int64
+		wantStep int64
+	}{{"7d", 604800, 3600}, {"1y", 31536000, 86400}} {
+		ser, err := s.Query(context.Background(), c.secs, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ser.Step != c.wantStep {
+			t.Fatalf("%s: step=%d, want %d (range step, not the raw fallback's 1)", c.name, ser.Step, c.wantStep)
+		}
+		if slots := (ser.End - ser.Start) / ser.Step; slots > 1000 {
+			t.Fatalf("%s: %d grid slots — fallback must not grid at the fine tier's step", c.name, slots)
+		}
+		nz := 0
+		for _, p := range ser.Points {
+			if p.Down > 0 {
+				nz++
+			}
+		}
+		if nz == 0 {
+			t.Fatalf("%s: the available raw data must still render (bucketed), got all zero", c.name)
+		}
+	}
+
+	// A finer tier with several hours of 1m data serves a 7d request too (gridded at 1h).
+	seedTier(t, s, "1m", "", now, 60, 360, 1<<20) // 6h of 1m
+	ser, _ := s.Query(context.Background(), 604800, "")
+	if ser.Step != 3600 {
+		t.Fatalf("7d via 1m fallback: step=%d, want 3600", ser.Step)
+	}
+	nz := 0
+	for _, p := range ser.Points {
+		if p.Down > 0 {
+			nz++
+		}
+	}
+	if nz < 5 {
+		t.Fatalf("7d should show the ~6h of 1m data; only %d slots nonzero", nz)
+	}
+}
+
 // FirstTS must report the exact first-sight ts even when the seen-refresh would be
 // throttled (process already running >60s) and a rollup has stamped bucket-floored
 // rows into the coarse tiers. Regression for the "reports a time before the torrent
