@@ -30,7 +30,7 @@
     {
       title: 'view',
       rows: [
-        { keys: ['v'], label: 'cycle list / grid / insight' },
+        { keys: ['v'], label: 'cycle list / insight' },
         { keys: ['a'], label: 'add torrent' },
         { keys: ['?'], label: 'toggle this help' },
       ],

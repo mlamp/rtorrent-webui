@@ -125,3 +125,73 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 		t.Fatal("global rows must survive GC")
 	}
 }
+
+// Gauges are stored as instantaneous values and rolled up by AVERAGE (not the
+// last-value-wins of the cumulative `samples` tier), and queried back without any
+// rate derivation.
+func TestGaugeSampleRollupQuery(t *testing.T) {
+	s, err := New(t.TempDir() + "/g.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const base = 1_700_000_000
+	s.now = func() int64 { return base + 120 }
+
+	// Two raw cpu samples in the same 1m bucket: 200 and 400 → AVG 300.
+	s.SampleGauges(map[string]int64{"cpu": 200, "peers": 3}, base+0)
+	s.SampleGauges(map[string]int64{"cpu": 400, "peers": 5}, base+30)
+
+	var raw int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM metrics WHERE res='raw' AND metric='cpu'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != 2 {
+		t.Fatalf("raw cpu rows = %d, want 2", raw)
+	}
+
+	// Rollup → the 1m bucket holds the AVERAGE (300), not last-value (400).
+	s.maintain()
+	var avg int64
+	if err := s.db.QueryRow(`SELECT value FROM metrics WHERE res='1m' AND metric='cpu'`).Scan(&avg); err != nil {
+		t.Fatal(err)
+	}
+	if avg != 300 {
+		t.Fatalf("1m cpu rollup = %d, want 300 (AVG, not last-value)", avg)
+	}
+
+	// QueryGauges returns stored gauge magnitudes directly (no derivation).
+	series, err := s.QueryGauges(context.Background(), 900, []string{"cpu", "peers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series["cpu"]) == 0 {
+		t.Fatal("no cpu points")
+	}
+	for _, p := range series["cpu"] {
+		if p.V != 200 && p.V != 400 {
+			t.Fatalf("unexpected cpu gauge value %d (expected a stored magnitude)", p.V)
+		}
+	}
+	if _, ok := series["peers"]; !ok {
+		t.Fatal("requested 'peers' series missing from result")
+	}
+}
+
+func TestFirstSeenMap(t *testing.T) {
+	s, err := New(t.TempDir() + "/fseen.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const base = 1_700_000_000
+	s.now = func() int64 { return base }
+	s.Sample([]model.Torrent{{Hash: "AAA"}, {Hash: "BBB"}}, model.Globals{}, base+7)
+
+	m := s.FirstSeen(context.Background())
+	if m["AAA"] != base+7 || m["BBB"] != base+7 {
+		t.Fatalf("FirstSeen = %+v, want AAA/BBB = %d", m, base+7)
+	}
+}

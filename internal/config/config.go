@@ -32,6 +32,7 @@ type Config struct {
 
 type Server struct {
 	Listen string `toml:"listen"`
+	Name   string `toml:"name"` // optional instance label shown in the browser tab title + on-screen brand
 }
 
 type Rtorrent struct {

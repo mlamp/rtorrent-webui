@@ -2,6 +2,9 @@
 
 [server]
 listen = "0.0.0.0:8080"            # HTTP bind for the web UI + API
+# name = "TV"                       # optional instance label. Set it to brand the browser
+                                   # tab ("TV · TorUI") and the on-screen mark ("▚ TV ::TorUI").
+                                   # Empty keeps the default "TorUI · rtorrent" / "▚ TORUI ::rtorrent".
 
 [rtorrent]
 socket            = "/var/run/rtorrent/scgi.socket"  # SCGI unix socket (or host:port)

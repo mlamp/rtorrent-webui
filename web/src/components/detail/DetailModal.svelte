@@ -2,7 +2,7 @@
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import type { Status } from '$lib/types/torrent'
   import { detail } from '$lib/stores/detail.svelte'
-  import RowDetail from '../detail/RowDetail.svelte'
+  import RowDetail from './RowDetail.svelte'
 
   let { t }: { t: TorrentRow } = $props()
 
@@ -14,16 +14,7 @@
     hashing: '⟳',
     error: '!',
   }
-
-  function onWinKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.stopPropagation()
-      detail.close()
-    }
-  }
 </script>
-
-<svelte:window onkeydown={onWinKey} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div class="modal-bd" onclick={() => detail.close()} role="presentation">
@@ -35,10 +26,11 @@
       </div>
       <button class="modal-x" onclick={() => detail.close()} aria-label="close">✕</button>
     </div>
-    <!-- matches the inline panel's DETAIL_H growth: the stat strip wraps to two
-         rows at the modal's 880px width, so the body needs the extra headroom -->
-    <div class="modal-body" style="padding:0; height:min(700px,80vh)">
-      <RowDetail {t} inModal />
+    <!-- The body sizes to its content (capped by .modal's max-height); RowDetail's
+         tab area carries its own max-height scroll, so short torrents render a
+         compact popup instead of a tall, mostly-empty one. -->
+    <div class="modal-body" style="padding:0">
+      <RowDetail {t} />
     </div>
   </div>
 </div>

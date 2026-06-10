@@ -11,6 +11,11 @@ class DetailState {
   trackers = $state<TrackerInfo[]>([])
   pieces = $state<PiecesInfo | null>(null)
   loading = $state(false)
+  // set true around mutating calls (file priority / tracker toggle) so a silent
+  // background refresh can't clobber the optimistic result mid-flight.
+  busy = $state(false)
+  // monotonic guard: only the latest refreshActive() response may apply.
+  refreshSeq = 0
 
   // client-side ring buffer of the active torrent's rates for the Speed tab
   speedDown = $state<number[]>([])
@@ -22,6 +27,7 @@ class DetailState {
       return
     }
     this.activeHash = hash
+    this.tab = 'general' // every newly-opened torrent starts on PIECES, not a stale tab
     this.speedDown = []
     this.speedUp = []
     this.pieces = null
@@ -51,13 +57,33 @@ class DetailState {
     }
   }
 
-  // Silent refresh of the piece bitfield (no loading flag) so the PIECES map can
-  // update live while the tab stays open, without flickering a spinner.
-  async loadPieces() {
+  // Silent refresh of whichever tab is open (no loading flag), so the detail panel
+  // stays live while open without flickering a spinner — "subscribed when opened".
+  // Guards: a monotonic seq + activeHash/tab recheck discard stale responses, and
+  // `busy` skips refreshing while a user mutation is in flight.
+  async refreshActive() {
     const h = this.activeHash
-    if (!h || this.tab !== 'general') return
-    const p = await silentGet<PiecesInfo>(`/api/torrents/${h}/pieces`)
-    if (p && this.activeHash === h && this.tab === 'general') this.pieces = p
+    const tab = this.tab
+    if (!h || this.busy) return
+    const seq = ++this.refreshSeq
+    const path =
+      tab === 'general'
+        ? 'pieces'
+        : tab === 'files'
+          ? 'files'
+          : tab === 'peers'
+            ? 'peers'
+            : tab === 'trackers'
+              ? 'trackers'
+              : ''
+    if (!path) return
+    const d = await silentGet<unknown>(`/api/torrents/${h}/${path}`)
+    // drop if stale (hash/tab moved on, a newer refresh started) or a mutation began
+    if (d == null || seq !== this.refreshSeq || this.activeHash !== h || this.tab !== tab || this.busy) return
+    if (tab === 'general') this.pieces = d as PiecesInfo
+    else if (tab === 'files') this.files = d as FileInfo[]
+    else if (tab === 'peers') this.peers = d as PeerInfo[]
+    else if (tab === 'trackers') this.trackers = d as TrackerInfo[]
   }
 
   pushSpeed(down: number, up: number) {
@@ -67,13 +93,23 @@ class DetailState {
 
   async setFilePriority(index: number, priority: number) {
     if (!this.activeHash) return
-    await api.setFilePriority(this.activeHash, index, priority)
-    await this.load()
+    this.busy = true
+    try {
+      await api.setFilePriority(this.activeHash, index, priority)
+      await this.load()
+    } finally {
+      this.busy = false
+    }
   }
   async toggleTracker(index: number, enabled: boolean) {
     if (!this.activeHash) return
-    await api.setTrackerEnabled(this.activeHash, index, enabled)
-    await this.load()
+    this.busy = true
+    try {
+      await api.setTrackerEnabled(this.activeHash, index, enabled)
+      await this.load()
+    } finally {
+      this.busy = false
+    }
   }
 }
 

@@ -508,6 +508,25 @@ body {
   color: var(--destructive);
   background: color-mix(in srgb, var(--destructive) 8%, transparent);
 }
+.rd-copy {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--dim);
+  width: 22px;
+  height: 20px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.rd-copy:hover {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--primary) 40%, transparent);
+}
 .rd-strip {
   display: flex;
   flex-wrap: wrap;
@@ -969,146 +988,6 @@ body {
   min-width: 130px;
 }
 
-/* ---- GRID card view ----
-   NOTE: must NOT be named `.grid` — that collides with Tailwind's `grid`
-   (display:grid) utility used by the table header, every torrent row, and the
-   detail file/peer rows, whose layout would then inherit this flex:1 + padding. */
-.cardgrid {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 16px 18px;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
-  gap: 13px;
-  align-content: start;
-  grid-auto-rows: min-content;
-}
-.gcard {
-  align-self: start;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 13px 13px 12px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 3%, transparent), transparent);
-  cursor: pointer;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  transition:
-    border-color 0.14s,
-    background 0.14s,
-    box-shadow 0.14s;
-}
-.gcard:hover {
-  border-color: color-mix(in srgb, var(--primary) 32%, transparent);
-  background: color-mix(in srgb, var(--primary) 5%, transparent);
-}
-.gcard.sel {
-  border-color: color-mix(in srgb, var(--acc2) 42%, transparent);
-  background: color-mix(in srgb, var(--acc2) 4.5%, transparent);
-}
-.gcard.cursor {
-  box-shadow:
-    0 0 0 1px var(--acc2),
-    0 0 22px color-mix(in srgb, var(--acc2) 12%, transparent);
-}
-.gcard.sweep {
-  box-shadow: inset 0 0 36px color-mix(in srgb, var(--acc2) 20%, transparent);
-}
-.gc-top {
-  display: flex;
-  align-items: flex-start;
-  gap: 9px;
-}
-.gc-mk {
-  font-size: 12px;
-  flex: none;
-  width: 14px;
-  text-align: center;
-  margin-top: 1px;
-}
-.gc-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  color: var(--foreground);
-  line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.gc-chk {
-  position: relative;
-  flex: none;
-  margin-top: 1px;
-}
-.gc-piece {
-  height: 34px;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  opacity: 0.9;
-}
-.gc-prog {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-.gc-prog .seg {
-  height: 10px;
-}
-.gc-pct {
-  font-size: 11.5px;
-  color: var(--acc);
-  width: 34px;
-  text-align: right;
-  flex: none;
-}
-.gc-graph {
-  height: 30px;
-  color: var(--acc);
-  margin: -1px 0 1px;
-  border-bottom: 1px solid color-mix(in srgb, var(--primary) 8%, transparent);
-}
-.gc-meta {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 11px;
-  color: var(--dim2);
-  flex-wrap: wrap;
-}
-.gc-meta .d {
-  color: var(--acc);
-}
-.gc-meta .u {
-  color: var(--acc2);
-}
-.gc-meta .sz {
-  color: var(--dim2);
-}
-.gc-meta .rt {
-  color: var(--acc2);
-  margin-left: auto;
-}
-.gc-stat {
-  position: absolute;
-  top: 0;
-  right: 0;
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--dim);
-  padding: 3px 7px;
-  border-bottom-left-radius: 4px;
-  border-left: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-
 /* ---- INSIGHT view ---- */
 .insight {
   flex: 1;
@@ -1212,9 +1091,41 @@ body {
   background: linear-gradient(90deg, var(--acc2), var(--acc));
   box-shadow: 0 0 12px color-mix(in srgb, var(--acc2) 45%, transparent);
 }
-.ip-search {
-  font-size: 13px;
+.ip-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.ip-metrics .ip {
+  margin-bottom: 0;
+}
+.ip-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.ip-label-row .ip-label {
+  margin-bottom: 0;
+}
+.ip-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 10.5px;
   color: var(--dim);
+}
+.ip-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ip-legend i {
+  display: inline-block;
+  width: 9px;
+  height: 3px;
+  border-radius: 2px;
 }
 .ip-foot {
   text-align: center;

@@ -7,16 +7,17 @@
   import { view, matches, compare, type StatusFilter } from '$lib/stores/view.svelte'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
+  import { config } from '$lib/stores/config.svelte'
   import { connectSSE } from '$lib/api/sse'
   import { api, bulk } from '$lib/api/client'
   import { short, trackerHost } from '$lib/format'
   import SpeedGraph from './components/SpeedGraph.svelte'
   import TorrentTable from './components/table/TorrentTable.svelte'
-  import GridView from './components/grid/GridView.svelte'
-  import GridDetailModal from './components/grid/GridDetailModal.svelte'
+  import DetailModal from './components/detail/DetailModal.svelte'
   import AddTorrentDialog from './components/toolbar/AddTorrentDialog.svelte'
   import ThrottleDialog from './components/toolbar/ThrottleDialog.svelte'
   import HelpDialog from './components/ui/HelpDialog.svelte'
+  import Brand from './components/ui/Brand.svelte'
   import InsightView from './components/insight/InsightView.svelte'
 
   let addOpen = $state(false)
@@ -37,6 +38,12 @@
   let rtVersion = $state('')
   onMount(() => {
     const close = connectSSE()
+    // Instance name first (fast, rtorrent-independent) so the brand/title never
+    // wait on — or get stuck behind — a slow/unreachable daemon.
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((j) => (config.name = j?.data?.name ?? ''))
+      .catch(() => {})
     fetch('/api/version')
       .then((r) => r.json())
       .then((j) => (rtVersion = j?.data?.rtorrent ? `rtorrent ${j.data.rtorrent} · api ${j.data.api}` : ''))
@@ -44,16 +51,22 @@
     return close
   })
 
-  // Live up/down speed in the browser tab title (Flood-style).
+  // Live up/down speed in the browser tab title (Flood-style). A configured
+  // instance name leads the title ("TV · TorUI"); unset keeps "TorUI · rtorrent".
   $effect(() => {
     const d = globals.downRate
     const u = globals.upRate
     const live = globals.connection === 'live'
+    const name = config.name
     // Show only the non-zero side(s) — a pure seed shows just ↑, idle shows neither.
     const parts: string[] = []
     if (d > 0) parts.push(`↓ ${short(d)}B/s`)
     if (u > 0) parts.push(`↑ ${short(u)}B/s`)
-    document.title = live && parts.length ? `${parts.join(' ')} · TorUI` : 'TorUI · rtorrent'
+    if (live && parts.length) {
+      document.title = name ? `${parts.join(' ')} · ${name}` : `${parts.join(' ')} · TorUI`
+    } else {
+      document.title = name ? `${name} · TorUI` : 'TorUI · rtorrent'
+    }
   })
 
   const all = $derived([...torrents.map.values()])
@@ -135,8 +148,8 @@
       return
     }
     if (helpOpen) return
-    // when the grid detail modal is open, swallow nav (Escape handled above)
-    if (view.mode === 'grid' && detail.activeHash) return
+    // when the detail modal is open, swallow nav (Escape handled above)
+    if (detail.activeHash) return
 
     const rows = visible
     const idx = rows.findIndex((r) => r.hash === view.cursor)
@@ -211,10 +224,8 @@
     else if (er.bottom > cr.bottom - 4) cont.scrollTop += er.bottom - cr.bottom + 10
   })
 
-  const gridModalTorrent = $derived(
-    view.mode === 'grid' && detail.activeHash ? torrents.map.get(detail.activeHash) : undefined,
-  )
-  const hintVisible = $derived(!addOpen && !throttleOpen && !helpOpen && !(view.mode === 'grid' && detail.activeHash))
+  const modalTorrent = $derived(detail.activeHash ? torrents.map.get(detail.activeHash) : undefined)
+  const hintVisible = $derived(!addOpen && !throttleOpen && !helpOpen && !detail.activeHash)
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -222,10 +233,10 @@
 
 <div class="flex h-svh flex-col">
   <div class="flex min-h-0 flex-1">
-    <!-- ───────── sidebar (full-height left rail; list/grid only) ───────── -->
+    <!-- ───────── sidebar (full-height left rail; list only) ───────── -->
     {#if view.mode !== 'insight'}
       <aside class="hidden w-[300px] shrink-0 flex-col gap-5 overflow-y-auto border-r border-line px-4 py-[18px] md:flex">
-        <div class="brand mb-1.5">▚ TORUI<span class="ml-0.5 text-[13px] font-normal tracking-[0.04em] text-dim">::rtorrent</span></div>
+        <Brand class="mb-1.5" />
 
         <div class="cap-box px-[13px] pb-[11px] pt-[13px]">
           <div class="cap">transfer</div>
@@ -282,39 +293,44 @@
       </aside>
     {/if}
 
-    <!-- ───────── main column (top bar lives here; inset for list/grid, full-width for insight) ───────── -->
+    <!-- ───────── main column (top bar lives here; inset for list, full-width for insight) ───────── -->
     <main class="flex min-w-0 flex-1 flex-col">
       <header class="flex h-[54px] shrink-0 items-center gap-[14px] border-b border-line px-4">
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <div
-          class="searchbar flex h-9 min-w-0 flex-1 cursor-text items-center gap-2 rounded-md border border-line px-[13px] {searchActive || view.search ? 'active' : ''}"
-          style="background:color-mix(in srgb, var(--primary) 3%, transparent)"
-          onclick={() => searchEl?.focus()}
-          role="searchbox"
-          aria-label="filter torrents"
-          tabindex="-1"
-        >
-          <span class="text-[12.5px] text-dim">~/torrents</span>
-          <span class="text-primary">$</span>
-          <span class="text-acc2">grep</span>
-          <input
-            bind:this={searchEl}
-            bind:value={view.search}
-            onfocus={() => (searchActive = true)}
-            onblur={() => (searchActive = false)}
-            class="min-w-[40px] flex-1 border-0 bg-transparent text-[13px] text-foreground outline-none"
-            style="caret-color:transparent"
-            spellcheck="false"
-          />
-          <span class="caret">▋</span>
-          {#if view.search}
-            <span class="whitespace-nowrap text-[11.5px] text-dim">{visible.length} match{visible.length === 1 ? '' : 'es'}</span>
-          {/if}
-        </div>
+        {#if view.mode === 'insight'}
+          <!-- insight has no torrent list to filter; show the brand where search would be
+               (the sidebar — and its brand — is hidden in this mode) -->
+          <Brand class="min-w-0 flex-1" />
+        {:else}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <div
+            class="searchbar flex h-9 min-w-0 flex-1 cursor-text items-center gap-2 rounded-md border border-line px-[13px] {searchActive || view.search ? 'active' : ''}"
+            style="background:color-mix(in srgb, var(--primary) 3%, transparent)"
+            onclick={() => searchEl?.focus()}
+            role="searchbox"
+            aria-label="filter torrents"
+            tabindex="-1"
+          >
+            <span class="text-[12.5px] text-dim">~/torrents</span>
+            <span class="text-primary">$</span>
+            <span class="text-acc2">grep</span>
+            <input
+              bind:this={searchEl}
+              bind:value={view.search}
+              onfocus={() => (searchActive = true)}
+              onblur={() => (searchActive = false)}
+              class="min-w-[40px] flex-1 border-0 bg-transparent text-[13px] text-foreground outline-none"
+              style="caret-color:transparent"
+              spellcheck="false"
+            />
+            <span class="caret">▋</span>
+            {#if view.search}
+              <span class="whitespace-nowrap text-[11.5px] text-dim">{visible.length} match{visible.length === 1 ? '' : 'es'}</span>
+            {/if}
+          </div>
+        {/if}
 
         <div class="flex shrink-0 gap-2">
           <button class="tbtn {view.mode === 'list' ? 'solid' : ''}" onclick={() => (view.mode = 'list')}><span>≡</span> LIST</button>
-          <button class="tbtn {view.mode === 'grid' ? 'solid' : ''}" onclick={() => (view.mode = 'grid')}><span>⊞</span> GRID</button>
           <button class="tbtn {view.mode === 'insight' ? 'solid' : ''}" onclick={() => (view.mode = 'insight')}><span>▤</span> INSIGHT</button>
           <button class="tbtn acc" onclick={() => (addOpen = true)}><span>+</span> ADD</button>
           <button class="tbtn" onclick={() => (throttleOpen = true)} title="rate limits"><span>⇅</span></button>
@@ -337,12 +353,10 @@
       {/if}
 
       <!-- content fills the space below the header; gives the views a definite
-           height so TorrentTable's h-full / GridView+Insight flex:1 resolve correctly -->
+           height so TorrentTable's h-full / InsightView flex:1 resolve correctly -->
       <div class="flex min-h-0 flex-1 flex-col">
         {#if view.mode === 'list'}
           <TorrentTable rows={visible} />
-        {:else if view.mode === 'grid'}
-          <GridView rows={visible} />
         {:else}
           <InsightView />
         {/if}
@@ -368,6 +382,6 @@
 <AddTorrentDialog bind:open={addOpen} />
 <ThrottleDialog bind:open={throttleOpen} />
 <HelpDialog bind:open={helpOpen} />
-{#if gridModalTorrent}
-  <GridDetailModal t={gridModalTorrent} />
+{#if modalTorrent}
+  <DetailModal t={modalTorrent} />
 {/if}

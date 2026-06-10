@@ -5,7 +5,7 @@
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
   import { view } from '$lib/stores/view.svelte'
-  import { short, ratio, eta } from '$lib/format'
+  import { short, ratio, eta, relativeTime } from '$lib/format'
 
   let { t, cols }: { t: TorrentRow; cols: string } = $props()
 
@@ -122,4 +122,5 @@
   <div class="text-right text-[12.5px] text-foreground/70">{short(t.size)}<span class="ml-px text-[10px] text-dim">B</span></div>
   <div class="text-right text-[12px] text-acc2">{ratio(t.ratio)}</div>
   <div class="text-right text-[12px] text-dim">{eta(t.etaSeconds)}</div>
+  <div class="text-right text-[12px] text-dim">{relativeTime(t.added)}</div>
 </div>

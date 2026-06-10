@@ -3,7 +3,7 @@ import { trackerHost } from '$lib/format'
 import type { TorrentRow } from './torrents.svelte'
 
 export type StatusFilter = 'all' | 'active' | 'downloading' | 'seeding' | 'stopped' | 'error'
-export type ViewMode = 'list' | 'grid' | 'insight'
+export type ViewMode = 'list' | 'insight'
 export type ColumnKey =
   | 'name'
   | 'size'
@@ -19,11 +19,11 @@ export type ColumnKey =
 
 // ── persistence (client-side only) ───────────────────────────────────────────
 // Keep the stable view prefs across reloads — the filter (e.g. ACTIVE), the sort,
-// and which view (list/grid/insight). Ephemeral state (search, cursor) and dynamic
+// and which view (list/insight). Ephemeral state (search, cursor) and dynamic
 // facets (label/tracker, which can orphan into an empty list) are intentionally not
 // persisted. localStorage only; nothing server-side.
 const STORE_KEY = 'rtwebui.view.v1'
-const MODES: readonly ViewMode[] = ['list', 'grid', 'insight']
+const MODES: readonly ViewMode[] = ['list', 'insight']
 const STATUSES: readonly StatusFilter[] = ['all', 'active', 'downloading', 'seeding', 'stopped', 'error']
 const SORT_KEYS: readonly ColumnKey[] = ['name', 'size', 'done', 'downRate', 'upRate', 'rate', 'eta', 'ratio', 'status', 'label', 'added']
 
@@ -48,7 +48,7 @@ class ViewState {
   search = $state('')
   sortKey = $state<ColumnKey>(oneOf(saved.sortKey, SORT_KEYS, 'name'))
   sortDir = $state<1 | -1>(saved.sortDir === -1 ? -1 : 1)
-  /** which primary view is showing (list cards/grid cards/insight). */
+  /** which primary view is showing (list/insight). */
   mode = $state<ViewMode>(oneOf(saved.mode, MODES, 'list'))
   /** keyboard-navigation cursor (a torrent hash), independent of selection. */
   cursor = $state<string | null>(null)
@@ -62,7 +62,7 @@ class ViewState {
     }
   }
   cycleMode() {
-    this.mode = this.mode === 'list' ? 'grid' : this.mode === 'grid' ? 'insight' : 'list'
+    this.mode = this.mode === 'list' ? 'insight' : 'list'
   }
 }
 
@@ -100,7 +100,11 @@ export function matches(t: TorrentRow, v: ViewState): boolean {
   } else if (!statusMatch[v.status](t.status)) return false
   if (v.label !== null && t.label !== v.label) return false
   if (v.tracker !== null && trackerHost(t.tracker) !== v.tracker) return false
-  if (v.search && !t.name.toLowerCase().includes(v.search.toLowerCase())) return false
+  if (v.search) {
+    const q = v.search.toLowerCase()
+    // match on name OR infohash, so a pasted/typed hash finds its torrent
+    if (!t.name.toLowerCase().includes(q) && !t.hash.toLowerCase().includes(q)) return false
+  }
   return true
 }
 

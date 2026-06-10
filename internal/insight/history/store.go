@@ -33,6 +33,12 @@ type Point struct {
 	Up   int64 `json:"up"`
 }
 
+// GaugePoint is one stored gauge value at a timestamp (no derivation).
+type GaugePoint struct {
+	TS int64 `json:"t"`
+	V  int64 `json:"v"`
+}
+
 type tier struct {
 	res    string
 	bucket int64 // seconds per bucket (raw = 1, i.e. unbucketed)
@@ -58,18 +64,22 @@ var rollups = []struct {
 	{"1h", "1d", 86400, 50 * 3600},
 }
 
+// gaugeRollups uses the same tiers/windows as `rollups`, but the gauge rollup in
+// maintain() AVERAGES per bucket (gauges are instantaneous, not cumulative).
+var gaugeRollups = rollups
+
 const seenGrace = 5 * 60 // purge a torrent's history this long after it disappears
 
 type Store struct {
-	db        *sql.DB
-	last      map[string][2]int64 // series hash -> last written {down,up} (raw dedup)
-	lastSeen  int64               // unix secs of last `seen` refresh (throttled)
-	now       func() int64
+	db       *sql.DB
+	last     map[string][2]int64 // series hash -> last written {down,up} (raw dedup)
+	lastSeen int64               // unix secs of last `seen` refresh (throttled)
+	now      func() int64
 }
 
 // schemaVersion is the version this build expects; New() applies every
 // migration up to it. Bump it and append a migration when the schema changes.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migration mutates the schema from version-1 to its version, inside a tx.
 type migration struct {
@@ -121,6 +131,21 @@ var migrations = []migration{
 		// bucket-floored MIN, but better than 0; new torrents get the exact ts).
 		_, err := tx.Exec(`UPDATE seen SET first_seen =
 			COALESCE((SELECT MIN(ts) FROM samples WHERE samples.hash = seen.hash), 0)`)
+		return err
+	}},
+	{3, "gauge metrics table", func(tx *sql.Tx) error {
+		// System/process GAUGE series (cpu%, load, mem%, peer count, session totals).
+		// Unlike `samples` (cumulative counters → derived rates), these are stored as
+		// the instantaneous value and rolled up by AVERAGE per bucket. All global, so
+		// there's no hash column and no per-torrent GC.
+		_, err := tx.Exec(`
+			CREATE TABLE IF NOT EXISTS metrics (
+				res    TEXT    NOT NULL,           -- 'raw' | '1m' | '1h' | '1d'
+				metric TEXT    NOT NULL,           -- 'cpu' | 'load1' | 'mem' | 'peers' | …
+				ts     INTEGER NOT NULL,
+				value  INTEGER NOT NULL,
+				PRIMARY KEY (res, metric, ts)
+			) WITHOUT ROWID;`)
 		return err
 	}},
 }
@@ -307,6 +332,39 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 	ok = true
 }
 
+// SampleGauges records instantaneous gauge values (cpu/load/mem/peers/session
+// totals) at ts into the raw tier. No dedup: gauges move essentially every tick,
+// and the AVG rollup wants to see repeats (a steady peers=0 still matters). Raw
+// retention is only 15m, so volume stays bounded. Empty map is a no-op.
+func (s *Store) SampleGauges(m map[string]int64, ts int64) {
+	if len(m) == 0 {
+		return
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return
+	}
+	ok := false
+	defer func() {
+		if ok {
+			_ = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
+	}()
+	ins, err := tx.Prepare(`INSERT OR REPLACE INTO metrics(res,metric,ts,value) VALUES('raw',?,?,?)`)
+	if err != nil {
+		return
+	}
+	defer ins.Close()
+	for k, v := range m {
+		if _, err := ins.Exec(k, ts, v); err != nil {
+			return
+		}
+	}
+	ok = true
+}
+
 func (s *Store) maintainLoop() {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
@@ -329,6 +387,20 @@ func (s *Store) maintain() {
 	}
 	for _, t := range tiers {
 		s.db.Exec(`DELETE FROM samples WHERE res=? AND ts < ?`, t.res, now-t.retain)
+	}
+	// Gauge rollups: AVERAGE value per dst bucket (gauges are instantaneous, so
+	// last-value-wins would throw away the bucket's shape). Stamp the bucket start,
+	// matching the `samples` convention so the chart X-axis logic stays consistent.
+	for _, r := range gaugeRollups {
+		s.db.Exec(`
+			INSERT OR REPLACE INTO metrics(res,metric,ts,value)
+			SELECT ?, metric, (ts/?)*?, CAST(AVG(value) AS INTEGER)
+			FROM metrics WHERE res=? AND ts >= ?
+			GROUP BY metric, ts/?`,
+			r.dst, r.bucket, r.bucket, r.src, now-r.window, r.bucket)
+	}
+	for _, t := range tiers {
+		s.db.Exec(`DELETE FROM metrics WHERE res=? AND ts < ?`, t.res, now-t.retain)
 	}
 	// GC removed torrents (only once we actually know the current set).
 	var seenCount int
@@ -484,6 +556,105 @@ func (s *Store) FirstTS(ctx context.Context, hash string) (int64, error) {
 		return 0, nil
 	}
 	return ts.Int64, nil
+}
+
+// QueryGauges returns each requested gauge series for the range, decimated to
+// ~target points. Values are the stored gauges (no derivation). Like Query, it
+// picks a resolution tier from the range and falls back to finer tiers when a
+// coarse one hasn't rolled up yet. Every requested metric is present in the result
+// (empty slice when it holds no data) so the client shape is stable.
+func (s *Store) QueryGauges(ctx context.Context, rangeSecs int64, metrics []string) (map[string][]GaugePoint, error) {
+	if rangeSecs <= 0 {
+		rangeSecs = 3600
+	}
+	idx, target := pickTier(rangeSecs)
+	from := s.now() - rangeSecs
+	out := make(map[string][]GaugePoint, len(metrics))
+	for _, m := range metrics {
+		var best []GaugePoint
+		for i := idx; i >= 0; i-- {
+			pts, err := s.queryGaugeTier(ctx, tierOrder[i], m, from)
+			if err != nil {
+				return nil, err
+			}
+			if len(pts) >= 2 {
+				best = pts
+				break
+			}
+			if len(pts) > len(best) {
+				best = pts // best-effort if every tier is sparse
+			}
+		}
+		out[m] = decimateGauge(best, target)
+	}
+	return out, nil
+}
+
+func (s *Store) queryGaugeTier(ctx context.Context, res, metric string, from int64) ([]GaugePoint, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT ts, value FROM metrics
+		WHERE res=? AND metric=? AND ts >= ?
+		ORDER BY ts`, res, metric, from)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var pts []GaugePoint
+	for rows.Next() {
+		var p GaugePoint
+		if err := rows.Scan(&p.TS, &p.V); err != nil {
+			return nil, err
+		}
+		pts = append(pts, p)
+	}
+	return pts, rows.Err()
+}
+
+func decimateGauge(pts []GaugePoint, target int) []GaugePoint {
+	if target <= 0 || len(pts) <= target {
+		return pts
+	}
+	out := make([]GaugePoint, 0, target)
+	step := float64(len(pts)) / float64(target)
+	for i := 0; i < target; i++ {
+		lo := int(float64(i) * step)
+		hi := int(float64(i+1) * step)
+		if hi > len(pts) {
+			hi = len(pts)
+		}
+		if lo >= hi {
+			continue
+		}
+		var sum int64
+		for j := lo; j < hi; j++ {
+			sum += pts[j].V
+		}
+		n := int64(hi - lo)
+		out = append(out, GaugePoint{TS: pts[hi-1].TS, V: sum / n})
+	}
+	return out
+}
+
+// FirstSeen returns hash -> first_seen epoch for every torrent on record, so the
+// poll source can overlay a STABLE "added" time (rtorrent has none: d.load_date
+// re-stamps on restart, d.creation_date is the metainfo date and often 0). Returns
+// a non-nil (possibly empty) map; any error yields an empty map so the caller's
+// overlay is always safe.
+func (s *Store) FirstSeen(ctx context.Context) map[string]int64 {
+	out := map[string]int64{}
+	rows, err := s.db.QueryContext(ctx, `SELECT hash, first_seen FROM seen WHERE first_seen > 0`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h string
+		var fs int64
+		if rows.Scan(&h, &fs) == nil && h != "" {
+			out[h] = fs
+		}
+	}
+	return out
 }
 
 func (s *Store) Close() error { return s.db.Close() }

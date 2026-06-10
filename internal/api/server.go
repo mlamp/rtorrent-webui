@@ -30,8 +30,9 @@ type Server struct {
 	detail DetailRPC // detail-tab data source (defaults to rpc; swapped in -mock mode)
 	// source, when set (-mock mode), feeds the torrents/stats/health endpoints
 	// instead of dialing rtorrent — same shape as poll.Source / rpc.Client.Poll.
-	source func(context.Context) ([]model.Torrent, model.Globals, error)
-	view   string
+	source  func(context.Context) ([]model.Torrent, model.Globals, error)
+	view    string
+	name    string // optional instance label surfaced to the SPA via /api/version
 	geo     GeoLookup
 	dirs    []string
 	history *history.Store
@@ -79,6 +80,7 @@ func (s *Server) Handler() http.Handler { return s.mux }
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.handleHealth)
 	s.mux.HandleFunc("GET /api/version", s.handleVersion)
+	s.mux.HandleFunc("GET /api/config", s.handleConfig)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	s.mux.HandleFunc("GET /api/torrents", s.handleTorrents)
 	s.mux.HandleFunc("GET /api/stats", s.handleStats)
@@ -138,6 +140,13 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	cv, _ := s.rpc.ClientVersion(ctx)
 	av, _ := s.rpc.APIVersion(ctx)
 	writeOK(w, map[string]any{"webui": Version, "rtorrent": cv, "api": av})
+}
+
+// handleConfig serves static UI config (the instance name). Deliberately separate
+// from /api/version — that one dials rtorrent and can be slow or fail when the
+// daemon is down, but the branding name must always load promptly regardless.
+func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
+	writeOK(w, map[string]any{"name": s.name})
 }
 
 func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {

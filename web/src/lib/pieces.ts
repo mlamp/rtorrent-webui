@@ -14,7 +14,7 @@ export function decodePieces(
   bitfield: string,
   sizeChunks: number,
   completedChunks: number,
-  budget = 600,
+  budget = 4000,
 ): PieceView {
   if (!Number.isFinite(sizeChunks) || sizeChunks <= 0) return { mode: 'bar' }
 

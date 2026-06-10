@@ -1,14 +1,9 @@
-<script lang="ts" module>
-  // Fixed height so the list's virtualization math stays exact — TorrentTable
-  // imports this. In a modal we fill the host instead.
-  export const DETAIL_H = 560
-</script>
-
 <script lang="ts">
   import { detail, type DetailTab } from '$lib/stores/detail.svelte'
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import { api, silentGet } from '$lib/api/client'
   import { short, ratio, relativeTime } from '$lib/format'
+  import { toast } from 'svelte-sonner'
   import { onMount } from 'svelte'
   import PieceMap from './PieceMap.svelte'
   import CountryFlag from './CountryFlag.svelte'
@@ -17,7 +12,7 @@
   import { peerFlags } from '$lib/peers'
   import { trackerFailing } from '$lib/trackers'
 
-  let { t, inModal = false }: { t: TorrentRow; inModal?: boolean } = $props()
+  let { t }: { t: TorrentRow } = $props()
 
   const paused = $derived(t.status === 'stopped' || t.status === 'paused')
   // Piece counts: prefer the /pieces fetch's own counts so the map and the legend
@@ -106,7 +101,7 @@
   onMount(() => {
     const id = setInterval(() => {
       loadHistory()
-      detail.loadPieces() // keep the PIECES map live (no-op unless that tab is open)
+      detail.refreshActive() // keep whichever tab is open live (pieces/files/peers/trackers)
     }, 3000)
     return () => clearInterval(id)
   })
@@ -124,6 +119,15 @@
   ]
 
 
+  async function copyHash() {
+    try {
+      await navigator.clipboard.writeText(t.hash)
+      toast.success('Infohash copied')
+    } catch {
+      toast.error('Copy failed')
+    }
+  }
+
   async function act(a: 'pause' | 'resume' | 'recheck' | 'remove') {
     try {
       if (a === 'pause') await api.stop(t.hash)
@@ -140,13 +144,14 @@
 </script>
 
 <section
-  class="detail-in flex flex-col overflow-hidden"
-  style="height:{inModal ? '100%' : DETAIL_H + 'px'}; border-top:1px solid var(--line); background:linear-gradient(180deg, color-mix(in srgb, var(--primary) 4%, transparent), transparent 120px); box-shadow:inset 2px 0 0 var(--acc2)"
+  class="detail-in flex flex-col"
+  style="border-top:1px solid var(--line); background:linear-gradient(180deg, color-mix(in srgb, var(--primary) 4%, transparent), transparent 120px); box-shadow:inset 2px 0 0 var(--acc2)"
 >
   <div class="shrink-0 px-5 pt-4">
     <div class="rd-head">
       <div class="flex min-w-0 items-center gap-2 text-[12px] text-dim2">
         <span class="rd-key">hash</span><span class="shrink-0 font-mono">{t.hash.slice(0, 16)}…</span>
+        <button class="rd-copy" onclick={copyHash} title="copy full infohash" aria-label="copy infohash">⧉</button>
         {#if t.directory}
           <span class="rd-key ml-2">path</span><span class="truncate font-mono" title={t.directory}>{t.directory}</span>
         {/if}
@@ -167,11 +172,11 @@
       <div class="rd-stat"><div class="rd-stat-l">ratio</div><div class="rd-stat-v text-acc2">{ratio(t.ratio)}</div></div>
       <div class="rd-stat"><div class="rd-stat-l">peers</div><div class="rd-stat-v">{t.peersConnected}/{t.seedsConnected}</div></div>
       <div class="rd-stat"><div class="rd-stat-l">status</div><div class="rd-stat-v">{t.status}</div></div>
-      <!-- "created": d.creation_date is the metainfo creation stamp, not the add
-           time (rtorrent's d.load_date re-stamps on every restart, so there is no
-           stable added-at) — label it for what it is -->
-      <div class="rd-stat"><div class="rd-stat-l">created</div><div class="rd-stat-v">{relativeTime(t.added)}</div></div>
-      <div class="rd-stat"><div class="rd-stat-l">tracker</div><div class="rd-stat-v" title={t.tracker}>{t.tracker || '—'}</div></div>
+      <!-- "added" = the first time TorUI observed this torrent (stable across
+           restarts; persisted in the history DB). rtorrent has no reliable added-at
+           of its own — d.load_date re-stamps on restart, d.creation_date is the
+           metainfo date. relativeTime() shows "—" until a first-seen sample lands. -->
+      <div class="rd-stat"><div class="rd-stat-l">added</div><div class="rd-stat-v">{relativeTime(t.added)}</div></div>
     </div>
 
     <!-- activity graph + timeframe selector — real per-torrent history -->
@@ -202,11 +207,11 @@
     </div>
   </div>
 
-  <div class="min-h-0 flex-1 overflow-auto px-5 pb-4">
+  <div class="overflow-y-auto px-5 pb-4" style="max-height:48vh">
     {#if detail.tab === 'general'}
       <div class="flex flex-col gap-3">
         {#if pieceView.mode === 'cells'}
-          <PieceMap cells={pieceView.cells} />
+          <PieceMap cells={pieceView.cells} pieceCount={pcs.size} />
         {:else}
           <!-- no per-piece bitfield available — show the real done% bar, not a fake grid -->
           <div class="h-2.5 w-full overflow-hidden rounded-sm" style="background:color-mix(in srgb,var(--primary) 12%,transparent)">

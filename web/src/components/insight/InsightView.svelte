@@ -1,19 +1,26 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import TrafficChart from '../charts/TrafficChart.svelte'
+  import MetricChart from '../charts/MetricChart.svelte'
   import { globals } from '$lib/stores/globals.svelte'
   import { silentGet } from '$lib/api/client'
   import { short } from '$lib/format'
 
   type Point = { t: number; down: number; up: number }
+  type GPoint = { t: number; v: number }
   let range = $state('1h')
   let points = $state<Point[]>([])
   let disks = $state<{ path: string; total: number; free: number; used: number }[]>([])
+  let metrics = $state<Record<string, GPoint[]>>({})
   const ranges = ['15m', '1h', '6h', '24h', '7d']
 
   async function loadHistory() {
     const d = await silentGet<{ points: Point[] }>(`/api/history?range=${range}`)
     if (d) points = d.points ?? []
+  }
+  async function loadMetrics() {
+    const d = await silentGet<Record<string, GPoint[]>>(`/api/metrics?range=${range}`)
+    if (d) metrics = d
   }
   async function loadDisk() {
     const d = await silentGet<typeof disks>('/api/diskspace')
@@ -22,18 +29,36 @@
   function setRange(r: string) {
     range = r
     loadHistory()
+    loadMetrics()
   }
   onMount(() => {
     loadHistory()
+    loadMetrics()
     loadDisk()
     const id = setInterval(() => {
       loadHistory()
+      loadMetrics()
       loadDisk()
     }, 3000)
     return () => clearInterval(id)
   })
 
   const usedPct = (d: { total: number; used: number }) => (d.total > 0 ? (d.used / d.total) * 100 : 0)
+
+  // Build a chart series from a stored gauge metric, scaling its integer encoding
+  // back to a display value (cpu/mem permille→%, load ×100→load, others as-is).
+  const ser = (key: string, color: string, label: string, scale = 1) => ({
+    points: (metrics[key] ?? []).map((p) => ({ t: p.t, v: p.v / scale })),
+    color,
+    label,
+  })
+
+  const pct = (v: number) => `${Math.round(v)}%`
+  const ld = (v: number) => v.toFixed(2)
+  const cnt = (v: number) => String(Math.round(v))
+  const byt = (v: number) => `${short(v)}B`
+
+  const LOAD_COLORS = { l1: 'var(--status-seed)', l5: 'var(--status-check)', l15: 'var(--status-error)' }
 </script>
 
 <div class="insight">
@@ -53,6 +78,50 @@
     <TrafficChart {points} height={300} />
   </section>
 
+  <div class="ip-metrics">
+    <section class="ip">
+      <div class="ip-label">cpu</div>
+      <MetricChart series={[ser('cpu', 'var(--primary)', 'cpu', 10)]} yMax={100} format={pct} height={170} />
+    </section>
+
+    <section class="ip">
+      <div class="ip-label">memory</div>
+      <MetricChart series={[ser('mem', 'var(--acc2)', 'mem', 10)]} yMax={100} format={pct} height={170} />
+    </section>
+
+    <section class="ip">
+      <div class="ip-label-row">
+        <span class="ip-label">load average</span>
+        <span class="ip-legend">
+          <span><i style="background:{LOAD_COLORS.l1}"></i>1m</span>
+          <span><i style="background:{LOAD_COLORS.l5}"></i>5m</span>
+          <span><i style="background:{LOAD_COLORS.l15}"></i>15m</span>
+        </span>
+      </div>
+      <MetricChart
+        series={[ser('load1', LOAD_COLORS.l1, '1m', 100), ser('load5', LOAD_COLORS.l5, '5m', 100), ser('load15', LOAD_COLORS.l15, '15m', 100)]}
+        format={ld}
+        height={170}
+      />
+    </section>
+
+    <section class="ip">
+      <div class="ip-label">connected peers</div>
+      <MetricChart series={[ser('peers', 'var(--status-download)', 'peers')]} format={cnt} height={170} />
+    </section>
+
+    <section class="ip">
+      <div class="ip-label-row">
+        <span class="ip-label">session transfer</span>
+        <span class="ip-legend">
+          <span><i style="background:var(--status-download)"></i>↓ {short(globals.downTotal)}B</span>
+          <span><i style="background:var(--status-seed)"></i>↑ {short(globals.upTotal)}B</span>
+        </span>
+      </div>
+      <MetricChart series={[ser('sess_down', 'var(--status-download)', '↓'), ser('sess_up', 'var(--status-seed)', '↑')]} format={byt} height={170} />
+    </section>
+  </div>
+
   <section class="ip">
     <div class="ip-label">disk</div>
     <div class="flex flex-col gap-4">
@@ -67,11 +136,6 @@
       {/each}
       {#if disks.length === 0}<p class="text-dim">// no disk paths configured</p>{/if}
     </div>
-  </section>
-
-  <section class="ip">
-    <div class="ip-label">search</div>
-    <div class="ip-search font-mono">// no search adapters configured — v1 seam, site adapters land later</div>
   </section>
 
   <div class="ip-foot font-mono">

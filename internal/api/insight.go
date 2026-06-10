@@ -43,13 +43,18 @@ func parseRange(s string) int64 {
 	return 3600
 }
 
-func (s *Server) SetDirs(dirs []string)          { s.dirs = dirs }
-func (s *Server) SetHistory(h *history.Store)     { s.history = h }
-func (s *Server) SetSearch(r *search.Registry)    { s.search = r }
+func (s *Server) SetName(name string)          { s.name = name }
+func (s *Server) SetDirs(dirs []string)        { s.dirs = dirs }
+func (s *Server) SetHistory(h *history.Store)  { s.history = h }
+func (s *Server) SetSearch(r *search.Registry) { s.search = r }
+
+// metricKeys is the fixed gauge set the Insight dashboard charts.
+var metricKeys = []string{"cpu", "load1", "load5", "load15", "mem", "peers", "sess_down", "sess_up"}
 
 func (s *Server) insightRoutes() {
 	s.mux.HandleFunc("GET /api/diskspace", s.handleDiskspace)
 	s.mux.HandleFunc("GET /api/history", s.handleHistory)
+	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)
 	s.mux.HandleFunc("GET /api/search", s.handleSearch)
 }
 
@@ -78,6 +83,32 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	// time ranges that have data (e.g. hide "1y" on a day-old torrent).
 	first, _ := s.history.FirstTS(ctx, hash)
 	writeOK(w, map[string]any{"points": pts, "first": first})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if s.history == nil {
+		out := map[string][]history.GaugePoint{}
+		for _, k := range metricKeys {
+			out[k] = []history.GaugePoint{}
+		}
+		writeOK(w, out)
+		return
+	}
+	rng := parseRange(r.URL.Query().Get("range"))
+	ctx, cancel := reqCtx(r)
+	defer cancel()
+	series, err := s.history.QueryGauges(ctx, rng, metricKeys)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "metrics_error", err.Error())
+		return
+	}
+	// Ensure every key is present (empty slice if no data) for a stable client shape.
+	for _, k := range metricKeys {
+		if series[k] == nil {
+			series[k] = []history.GaugePoint{}
+		}
+	}
+	writeOK(w, series)
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
