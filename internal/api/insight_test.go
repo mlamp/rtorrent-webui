@@ -25,9 +25,9 @@ func TestHandleHistoryWireShape(t *testing.T) {
 	now := time.Now().Unix()
 	// First sample already large (100 MiB session total), then +1 MiB/s — the grid
 	// must show ~1 MiB/s, never a 100 MiB/s delta-from-zero spike.
-	st.Sample([]model.Torrent{{Hash: "X", Completed: 100 << 20}}, model.Globals{}, now-3)
-	st.Sample([]model.Torrent{{Hash: "X", Completed: 101 << 20}}, model.Globals{}, now-2)
-	st.Sample([]model.Torrent{{Hash: "X", Completed: 102 << 20}}, model.Globals{}, now-1)
+	st.Sample([]model.Torrent{{Hash: "X", DownTotal: 100 << 20}}, model.Globals{}, now-3)
+	st.Sample([]model.Torrent{{Hash: "X", DownTotal: 101 << 20}}, model.Globals{}, now-2)
+	st.Sample([]model.Torrent{{Hash: "X", DownTotal: 102 << 20}}, model.Globals{}, now-1)
 
 	srv := New(sse.NewHub(), nil, "main")
 	srv.SetHistory(st)

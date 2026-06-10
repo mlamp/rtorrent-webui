@@ -332,19 +332,20 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 		}
 	}
 
-	// Global "" series = the SUM of the per-torrent cumulative counters (payload
-	// down/up), NOT throttle.global_*.total. Recomputed from the torrent list each
-	// tick, so it's stateless and restart-stable: Σ d.completed_bytes survives an
-	// rtorrent restart, whereas the throttle session totals reset to 0. It also matches
-	// the live sidebar's "sum of all torrents". Add/remove-torrent jumps in the sum are
-	// non-traffic discontinuities, clamped at query time by the rate cap (resampleGrid).
-	// The -rebuild-history hatch reconstructs this same Σ for historical rows, so live
-	// and reconstructed history are one coherent counter.
+	// Per-torrent + global "" rate series use the cumulative TRANSFER counters
+	// (DownTotal = d.down.total, UpTotal = d.up.total), NOT d.completed_bytes: those
+	// transfer totals are monotonic and DON'T collapse during a hash-check (a finished
+	// torrent with pieces.hash.on_completion re-reads from disk; completed_bytes drops
+	// to ~0 and re-climbs at disk speed, which would render as a fake download). The
+	// global "" is the SUM of the per-torrent counters — stateless, restart-stable
+	// (the transfer totals persist in rtorrent's resume data), and matches the live
+	// sidebar's "sum of all torrents". Add/remove-torrent jumps clamp at query time
+	// (resampleGrid). The -rebuild-history hatch reconstructs this same Σ for history.
 	var sumDown, sumUp int64
 	for _, t := range torrents {
-		sumDown += t.Completed
+		sumDown += t.DownTotal
 		sumUp += t.UpTotal
-		write(t.Hash, t.Completed, t.UpTotal)
+		write(t.Hash, t.DownTotal, t.UpTotal)
 	}
 	write("", sumDown, sumUp)
 

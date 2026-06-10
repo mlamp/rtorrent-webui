@@ -29,8 +29,8 @@ func TestMigrateFreshDB(t *testing.T) {
 	}
 	// new-schema column exists -> a Sample/Query round-trips
 	s.now = func() int64 { return 1001 }
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 0}}, model.Globals{}, 1000)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 << 20}}, model.Globals{}, 1001)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 0}}, model.Globals{}, 1000)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 1 << 20}}, model.Globals{}, 1001)
 	ser, err := s.Query(context.Background(), 900, "")
 	if err != nil {
 		t.Fatalf("query on fresh db: %v", err)
@@ -291,7 +291,7 @@ func TestRebuildRecordsMetaTimestamp(t *testing.T) {
 	defer s.Close()
 	const base = 1_700_000_000
 	s.now = func() int64 { return base + 42 }
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 << 20}}, model.Globals{}, base)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 1 << 20}}, model.Globals{}, base)
 	if _, err := s.RebuildGlobalFromTorrents(context.Background()); err != nil {
 		t.Fatal(err)
 	}

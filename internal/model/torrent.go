@@ -17,11 +17,16 @@ const (
 // Torrent is the per-row snapshot the table renders. done% and ETA are computed
 // client-side, so they are intentionally absent here.
 type Torrent struct {
-	Hash           string `json:"hash"`
-	Name           string `json:"name"`
-	Size           int64  `json:"size"`
-	Completed      int64  `json:"completed"`
-	DownRate       int64  `json:"downRate"`
+	Hash      string `json:"hash"`
+	Name      string `json:"name"`
+	Size      int64  `json:"size"`
+	Completed int64  `json:"completed"` // d.completed_bytes — bytes complete ON DISK (drives done%)
+	// DownTotal is d.down.total — cumulative bytes DOWNLOADED (monotonic, persists in
+	// rtorrent's resume data). Unlike Completed it does NOT collapse during a hash-check,
+	// so it's the source for the history download-rate series. Internal only (the wire
+	// uses Completed for progress; graphs come from /api/history), so json:"-".
+	DownTotal int64  `json:"-"`
+	DownRate  int64  `json:"downRate"`
 	UpRate         int64  `json:"upRate"`
 	UpTotal        int64  `json:"upTotal"`
 	Ratio          int64  `json:"ratio"` // permille (rtorrent ratio*1000)

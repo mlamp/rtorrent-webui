@@ -353,8 +353,8 @@ func TestSampleGlobalIsSumOfTorrents(t *testing.T) {
 	s.now = func() int64 { return base + 30 }
 
 	s.Sample([]model.Torrent{
-		{Hash: "A", Completed: 3 * MB, UpTotal: 1 * MB},
-		{Hash: "B", Completed: 7 * MB, UpTotal: 2 * MB},
+		{Hash: "A", DownTotal: 3 * MB, UpTotal: 1 * MB},
+		{Hash: "B", DownTotal: 7 * MB, UpTotal: 2 * MB},
 	}, model.Globals{DownTotal: 999, UpTotal: 999}, base)
 	if d, u := globalAt(t, s, "raw", base); d != 10*MB || u != 3*MB {
 		t.Fatalf("'' = %d/%d, want sum 10/3 MiB (NOT g.DownTotal=999)", d, u)
@@ -362,14 +362,50 @@ func TestSampleGlobalIsSumOfTorrents(t *testing.T) {
 
 	// next tick: A grows a little, and a large torrent C appears → sum jumps ~20 GiB.
 	s.Sample([]model.Torrent{
-		{Hash: "A", Completed: 4 * MB, UpTotal: 1 * MB},
-		{Hash: "B", Completed: 7 * MB, UpTotal: 2 * MB},
-		{Hash: "C", Completed: 20 << 30, UpTotal: 0},
+		{Hash: "A", DownTotal: 4 * MB, UpTotal: 1 * MB},
+		{Hash: "B", DownTotal: 7 * MB, UpTotal: 2 * MB},
+		{Hash: "C", DownTotal: 20 << 30, UpTotal: 0},
 	}, model.Globals{}, base+1)
 	ser, _ := s.Query(context.Background(), 30, "")
 	for _, p := range ser.Points {
 		if p.Down > 1<<30 { // the 20 GiB add must clamp, not render as tens of GB/s
 			t.Fatalf("add-torrent jump not clamped: %d B/s @%d", p.Down, p.TS)
+		}
+	}
+}
+
+// A finished torrent re-hashes (pieces.hash.on_completion): d.completed_bytes
+// collapses to ~0 and re-climbs at DISK speed — sub-clamp (~300 MB/s), so it would
+// draw as a real download. d.down.total (DownTotal) does NOT collapse. The download
+// rate series must follow DownTotal, so a hash-check renders 0.
+func TestHashcheckDoesNotFakeDownload(t *testing.T) {
+	s, err := New(t.TempDir() + "/hashcheck.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	const GB = 1 << 30
+	const MB = 1 << 20
+	s.now = func() int64 { return base + 12 } // keep all samples inside a 30s query window
+
+	// fully downloaded and stable: down.total == completed == 100 GiB.
+	s.Sample([]model.Torrent{{Hash: "A", DownTotal: 100 * GB, Completed: 100 * GB, UpTotal: 50 * GB}}, model.Globals{}, base)
+	// hash-check begins: completed_bytes COLLAPSES, down.total unchanged.
+	s.Sample([]model.Torrent{{Hash: "A", DownTotal: 100 * GB, Completed: 0, UpTotal: 50 * GB}}, model.Globals{}, base+1)
+	// re-verify re-climbs completed at ~300 MB/s (disk speed, well under the 16 GiB/s
+	// clamp so it would look real); down.total stays put the whole time.
+	for i := int64(1); i <= 10; i++ {
+		c := i * 300 * MB
+		if c > 100*GB {
+			c = 100 * GB
+		}
+		s.Sample([]model.Torrent{{Hash: "A", DownTotal: 100 * GB, Completed: c, UpTotal: 50 * GB}}, model.Globals{}, base+1+i)
+	}
+	ser, _ := s.Query(context.Background(), 30, "")
+	for _, p := range ser.Points {
+		if p.Down != 0 {
+			t.Fatalf("hash-check rendered as a fake %d B/s download @%d — the series must follow d.down.total, not d.completed_bytes", p.Down, p.TS)
 		}
 	}
 }
@@ -462,7 +498,7 @@ func TestFirstTSTruthfulDespiteThrottleAndRollup(t *testing.T) {
 	s.lastSeen = base // simulate a seen-refresh moments ago, so base+5 is throttled
 
 	// Torrent first observed 5s later (within the throttle window).
-	s.Sample([]model.Torrent{{Hash: "BBB", Completed: 1 << 20, UpTotal: 1 << 10}}, model.Globals{}, base+5)
+	s.Sample([]model.Torrent{{Hash: "BBB", DownTotal: 1 << 20, UpTotal: 1 << 10}}, model.Globals{}, base+5)
 	// Rollup floors a 1d bucket to midnight (~base-80000s) — the trap MIN(all tiers) would hit.
 	s.now = func() int64 { return base + 5 }
 	s.maintain()
@@ -492,14 +528,14 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	// Global "" series = Σ per-torrent. One torrent climbing +1 MiB/s down,
 	// +512 KiB/s up for 11 ticks drives it.
 	for i := 0; i <= 10; i++ {
-		s.Sample([]model.Torrent{{Hash: "AAA", Completed: int64(i) << 20, UpTotal: int64(i) * (512 << 10)}}, model.Globals{}, base+int64(i))
+		s.Sample([]model.Torrent{{Hash: "AAA", DownTotal: int64(i) << 20, UpTotal: int64(i) * (512 << 10)}}, model.Globals{}, base+int64(i))
 	}
 	if got := rawCount(t, s, ""); got != 11 {
 		t.Fatalf("raw global rows = %d, want 11", got)
 	}
 
 	// Dedup: an unchanged counter must NOT add a row.
-	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 10 << 20, UpTotal: 10 * (512 << 10)}}, model.Globals{}, base+11)
+	s.Sample([]model.Torrent{{Hash: "AAA", DownTotal: 10 << 20, UpTotal: 10 * (512 << 10)}}, model.Globals{}, base+11)
 	if got := rawCount(t, s, ""); got != 11 {
 		t.Fatalf("after unchanged sample, raw rows = %d, want 11 (dedup)", got)
 	}
@@ -527,7 +563,7 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	}
 
 	// Counter reset must clamp to 0 (no negative spike).
-	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 0, UpTotal: 0}}, model.Globals{}, base+12)
+	s.Sample([]model.Torrent{{Hash: "AAA", DownTotal: 0, UpTotal: 0}}, model.Globals{}, base+12)
 	ser, _ = s.Query(context.Background(), 30, "")
 	for _, p := range ser.Points {
 		if p.Down < 0 || p.Up < 0 {
@@ -544,7 +580,7 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	// Per-torrent + GC: add a fresh torrent, then let it disappear and age past
 	// seenGrace (but within the raw age-prune window, so we isolate GC from prune).
 	s.now = func() int64 { return base + 100 }
-	s.Sample([]model.Torrent{{Hash: "BBB", Completed: 5 << 20, UpTotal: 1 << 20}}, model.Globals{}, base+100)
+	s.Sample([]model.Torrent{{Hash: "BBB", DownTotal: 5 << 20, UpTotal: 1 << 20}}, model.Globals{}, base+100)
 	if rawCount(t, s, "BBB") == 0 {
 		t.Fatal("per-torrent row not written")
 	}
@@ -573,11 +609,11 @@ func TestIdleGapZeroFill(t *testing.T) {
 	s.now = func() int64 { return base + 121 }
 
 	// Active 0..2 (cumulative 0,1,2 MB), idle 3..119 (no samples), resume 120..121.
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 0}}, model.Globals{}, base+0)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 * MB}}, model.Globals{}, base+1)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 2 * MB}}, model.Globals{}, base+2)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 3 * MB}}, model.Globals{}, base+120)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 4 * MB}}, model.Globals{}, base+121)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 0}}, model.Globals{}, base+0)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 1 * MB}}, model.Globals{}, base+1)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 2 * MB}}, model.Globals{}, base+2)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 3 * MB}}, model.Globals{}, base+120)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 4 * MB}}, model.Globals{}, base+121)
 
 	// range 130s → raw tier, step 1, grid [base-9, base+121] = 131 slots (< target, no decimation).
 	ser, err := s.Query(context.Background(), 130, "")
@@ -670,8 +706,8 @@ func TestQueryClampsStartToFirstSeen(t *testing.T) {
 	s.now = func() int64 { return now }
 
 	// AAA first observed only 5 min ago, with global "" throttle data alongside.
-	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 0}}, model.Globals{}, now-300)
-	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 10 << 20}}, model.Globals{}, now-1)
+	s.Sample([]model.Torrent{{Hash: "AAA", DownTotal: 0}}, model.Globals{}, now-300)
+	s.Sample([]model.Torrent{{Hash: "AAA", DownTotal: 10 << 20}}, model.Globals{}, now-1)
 
 	per, err := s.Query(context.Background(), 3600, "AAA") // 1h range, only 5min of history
 	if err != nil {
@@ -707,9 +743,9 @@ func TestNoSpuriousSpikeAtFirstSample(t *testing.T) {
 
 	// First sample already at 100 MiB (e.g. a fresh history DB for a long-running
 	// rtorrent), then a real ~1 MiB/s for a few ticks.
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 100 * MB}}, model.Globals{}, base+10)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 101 * MB}}, model.Globals{}, base+11)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 102 * MB}}, model.Globals{}, base+12)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 100 * MB}}, model.Globals{}, base+10)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 101 * MB}}, model.Globals{}, base+11)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 102 * MB}}, model.Globals{}, base+12)
 
 	ser, err := s.Query(context.Background(), 60, "")
 	if err != nil {
@@ -752,10 +788,10 @@ func TestNoSpikeOnCounterRebaseline(t *testing.T) {
 
 	// Old baseline counter climbing at a real ~1 MiB/s, then a restart/version change
 	// RE-BASELINES it by +168 GB in one step, then real ~1 MiB/s resumes.
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 10 * GB}}, model.Globals{}, base+5)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 10*GB + MB}}, model.Globals{}, base+6)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 178 * GB}}, model.Globals{}, base+10)    // +168 GB step (re-baseline)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 178*GB + MB}}, model.Globals{}, base+11) // real ~1 MiB/s again
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 10 * GB}}, model.Globals{}, base+5)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 10*GB + MB}}, model.Globals{}, base+6)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 178 * GB}}, model.Globals{}, base+10)    // +168 GB step (re-baseline)
+	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 178*GB + MB}}, model.Globals{}, base+11) // real ~1 MiB/s again
 
 	ser, err := s.Query(context.Background(), 20, "")
 	if err != nil {

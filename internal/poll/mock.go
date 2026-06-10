@@ -31,6 +31,7 @@ func MockSource(n int) Source {
 			Name:           fmt.Sprintf("%s.%05d.bin", names[i%len(names)], i),
 			Size:           size,
 			Completed:      int64(i%5) * (10 << 20),
+			DownTotal:      int64(i%5) * (10 << 20),
 			Label:          labels[i%len(labels)],
 			Tracker:        trackers[i%len(trackers)],
 			Status:         model.StatusSeeding,
@@ -63,6 +64,7 @@ func MockSource(n int) Source {
 				t.UpRate = int64((i*57+tick*331)%2000) << 10
 				t.PeersConnected = int64((i + tick) % 40)
 				t.Completed += t.DownRate
+				t.DownTotal += t.DownRate // monotonic transfer counter (never collapses)
 				if t.Completed >= t.Size {
 					t.Completed = t.Size
 					t.Status = model.StatusSeeding

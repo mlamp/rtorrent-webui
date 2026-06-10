@@ -124,9 +124,10 @@ func TestDecodeTorrentsChunks(t *testing.T) {
 	row[1] = "name"  // name
 	row[2] = 1048576 // size
 	row[3] = 524288  // completed
-	row[20] = 16     // size_chunks
-	row[21] = 8      // completed_chunks
-	row[22] = 65536  // chunk_size
+	row[20] = 16          // size_chunks
+	row[21] = 8           // completed_chunks
+	row[22] = 65536       // chunk_size
+	row[23] = 9876543210  // down.total (cumulative downloaded)
 	b, _ := json.Marshal([][]any{row})
 
 	got, err := decodeTorrents(b)
@@ -138,6 +139,9 @@ func TestDecodeTorrentsChunks(t *testing.T) {
 	}
 	if got[0].SizeChunks != 16 || got[0].CompletedChunks != 8 || got[0].ChunkSize != 65536 {
 		t.Fatalf("chunk fields decoded wrong: %+v", got[0])
+	}
+	if got[0].DownTotal != 9876543210 {
+		t.Fatalf("DownTotal = %d, want 9876543210 (d.down.total at field 23)", got[0].DownTotal)
 	}
 }
 

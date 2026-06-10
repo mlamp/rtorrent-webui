@@ -37,6 +37,7 @@ var torrentFields = []string{
 	"d.size_chunks=",         // 20
 	"d.completed_chunks=",    // 21
 	"d.chunk_size=",          // 22
+	"d.down.total=",          // 23 (cumulative downloaded; monotonic through hash-checks)
 }
 
 // Poll fetches the full torrent list for a view plus global stats in ONE batched
@@ -224,6 +225,7 @@ func decodeTorrents(raw json.RawMessage) ([]model.Torrent, error) {
 			SizeChunks:      asIntRaw(r[20]),
 			CompletedChunks: asIntRaw(r[21]),
 			ChunkSize:       asIntRaw(r[22]),
+			DownTotal:       asIntRaw(r[23]),
 		}
 		t.PeersTotal = t.PeersConnected + asIntRaw(r[16])
 		t.SeedsTotal = t.SeedsConnected
