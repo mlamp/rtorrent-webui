@@ -108,72 +108,73 @@
 </script>
 
 <div bind:clientWidth={w} class="relative" style="color:var(--primary)">
-  {#if n < 2}
-    <!-- pre-first-fetch only: the server returns a dense zero-filled grid, so an
-         idle torrent renders a flat 0 line rather than landing here -->
-    <div style="height:{height}px"></div>
-  {:else}
-    <svg
-      bind:this={svgEl}
-      width="100%"
-      height={height}
-      viewBox="0 0 {w} {height}"
-      preserveAspectRatio="none"
-      role="img"
-      aria-label="traffic history"
-      onmousemove={onMove}
-      onmouseleave={() => (hover = null)}
-    >
-      <defs>
-        <linearGradient id="{uid}-f" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color={dlColor} stop-opacity="0.35" />
-          <stop offset="100%" stop-color={dlColor} stop-opacity="0" />
-        </linearGradient>
-        <filter id="{uid}-g" x="-10%" y="-10%" width="120%" height="120%">
-          <feGaussianBlur stdDeviation="2.4" result="b" />
-          <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
-        </filter>
-      </defs>
+  <!-- Always render the frame: even with no/sparse data the chart shows its axes and
+       a flat 0 baseline rather than going blank. -->
+  <svg
+    bind:this={svgEl}
+    width="100%"
+    height={height}
+    viewBox="0 0 {w} {height}"
+    preserveAspectRatio="none"
+    role="img"
+    aria-label="traffic history"
+    onmousemove={onMove}
+    onmouseleave={() => (hover = null)}
+  >
+    <defs>
+      <linearGradient id="{uid}-f" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color={dlColor} stop-opacity="0.35" />
+        <stop offset="100%" stop-color={dlColor} stop-opacity="0" />
+      </linearGradient>
+      <filter id="{uid}-g" x="-10%" y="-10%" width="120%" height="120%">
+        <feGaussianBlur stdDeviation="2.4" result="b" />
+        <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+      </filter>
+    </defs>
 
-      <!-- Y grid + labels -->
-      {#each yTicks as yt (yt.f)}
-        {@const y = padT + plotH - yt.f * plotH}
-        <line x1={padL} y1={y} x2={w - padR} y2={y} stroke="currentColor" stroke-opacity="0.08" />
-        <text x={padL - 8} y={y + 3.5} text-anchor="end" font-size="9.5" fill="var(--muted-foreground)" font-family="var(--font-mono, monospace)">
-          {short(yt.v)}{yt.f === 1 ? '/s' : ''}
-        </text>
-      {/each}
+    <!-- Y grid + labels -->
+    {#each yTicks as yt (yt.f)}
+      {@const y = padT + plotH - yt.f * plotH}
+      <line x1={padL} y1={y} x2={w - padR} y2={y} stroke="currentColor" stroke-opacity="0.08" />
+      <text x={padL - 8} y={y + 3.5} text-anchor="end" font-size="9.5" fill="var(--muted-foreground)" font-family="var(--font-mono, monospace)">
+        {short(yt.v)}{yt.f === 1 ? '/s' : ''}
+      </text>
+    {/each}
 
-      <!-- X labels -->
-      {#each xTicks as xt, i (i)}
-        <text x={xt.x} y={height - 8} text-anchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'} font-size="9.5" fill="var(--muted-foreground)" font-family="var(--font-mono, monospace)">
-          {xt.label}
-        </text>
-      {/each}
+    <!-- X labels (only when we have a real time window) -->
+    {#each xTicks as xt, i (i)}
+      <text x={xt.x} y={height - 8} text-anchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'} font-size="9.5" fill="var(--muted-foreground)" font-family="var(--font-mono, monospace)">
+        {xt.label}
+      </text>
+    {/each}
 
-      <!-- series -->
-      {#if dlArea}<path d={dlArea} fill="url(#{uid}-f)" />{/if}
-      {#if ulPath}<path d={ulPath} fill="none" stroke={ulColor} stroke-width="1.6" stroke-opacity="0.85" stroke-linecap="round" />{/if}
-      {#if dlPath}<path d={dlPath} fill="none" stroke={dlColor} stroke-width="1.7" stroke-linecap="round" filter="url(#{uid}-g)" />{/if}
-
-      <!-- hover crosshair + markers -->
-      {#if hp && hover !== null}
-        {@const hx = xOf(hp.t)}
-        <line x1={hx} y1={padT} x2={hx} y2={padT + plotH} stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="3 3" />
-        <circle cx={hx} cy={yOf(hp.down)} r="3" fill={dlColor} stroke="var(--background)" stroke-width="1.5" />
-        <circle cx={hx} cy={yOf(hp.up)} r="3" fill={ulColor} stroke="var(--background)" stroke-width="1.5" />
-      {/if}
-    </svg>
-
-    {#if hp}
-      <div
-        class="pointer-events-none absolute z-10 rounded-sm border border-line px-2.5 py-1.5 text-[11px] leading-tight"
-        style="left:{tipX}px; top:{padT + 2}px; background:color-mix(in srgb, var(--background) 92%, transparent); backdrop-filter:blur(3px)"
-      >
-        <div class="mb-1 text-dim">{fullTime(hp.t)}</div>
-        <div class="flex items-center gap-1.5"><span style="color:{dlColor}">↓</span> {short(hp.down)}<small class="text-dim">B/s</small></div>
-        <div class="flex items-center gap-1.5"><span style="color:{ulColor}">↑</span> {short(hp.up)}<small class="text-dim">B/s</small></div>
-      </div>
+    <!-- series -->
+    {#if dlArea}<path d={dlArea} fill="url(#{uid}-f)" />{/if}
+    {#if ulPath}<path d={ulPath} fill="none" stroke={ulColor} stroke-width="1.6" stroke-opacity="0.85" stroke-linecap="round" />{/if}
+    {#if dlPath}<path d={dlPath} fill="none" stroke={dlColor} stroke-width="1.7" stroke-linecap="round" filter="url(#{uid}-g)" />{/if}
+    <!-- guaranteed flat 0 baseline when there's no drawable line (empty / degenerate
+         window), so the chart is never blank -->
+    {#if !dlPath}
+      <line x1={padL} y1={padT + plotH} x2={w - padR} y2={padT + plotH} stroke={dlColor} stroke-width="1.6" stroke-opacity="0.6" stroke-linecap="round" />
     {/if}
+
+    <!-- hover crosshair + markers -->
+    {#if hp && hover !== null}
+      {@const hx = xOf(hp.t)}
+      <line x1={hx} y1={padT} x2={hx} y2={padT + plotH} stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="3 3" />
+      <circle cx={hx} cy={yOf(hp.down)} r="3" fill={dlColor} stroke="var(--background)" stroke-width="1.5" />
+      <circle cx={hx} cy={yOf(hp.up)} r="3" fill={ulColor} stroke="var(--background)" stroke-width="1.5" />
+    {/if}
+  </svg>
+
+  {#if hp}
+    <div
+      class="pointer-events-none absolute z-10 rounded-sm border border-line px-2.5 py-1.5 text-[11px] leading-tight"
+      style="left:{tipX}px; top:{padT + 2}px; background:color-mix(in srgb, var(--background) 92%, transparent); backdrop-filter:blur(3px)"
+    >
+      <div class="mb-1 text-dim">{fullTime(hp.t)}</div>
+      <div class="flex items-center gap-1.5"><span style="color:{dlColor}">↓</span> {short(hp.down)}<small class="text-dim">B/s</small></div>
+      <div class="flex items-center gap-1.5"><span style="color:{ulColor}">↑</span> {short(hp.up)}<small class="text-dim">B/s</small></div>
+    </div>
   {/if}
 </div>

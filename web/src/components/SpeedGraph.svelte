@@ -4,7 +4,7 @@
   // path/Y-scale logic as the full TrafficChart (via the shared timeSeriesPath +
   // niceMax helpers), just compact and axis-less. Idle/missing slots are zero-filled
   // server-side, so an idle period reads as a flat line on the baseline.
-  import { timeSeriesPath, niceMax } from '$lib/charts'
+  import { timeSeriesPath } from '$lib/charts'
 
   type Point = { t: number; down: number; up: number }
   let {
@@ -32,7 +32,10 @@
   let w = $state(246)
   const uid = 'sg' + Math.random().toString(36).slice(2, 8)
 
-  const maxVal = $derived(niceMax(Math.max(...points.map((p) => Math.max(p.down, p.up)), 1)))
+  // Tight scaling (peak + 15% headroom) so the compact, axis-less sparkline fills
+  // its height and reads as reactive — unlike the full chart it has no round-number
+  // axis to honour, so it doesn't use niceMax.
+  const maxVal = $derived(Math.max(1, ...points.map((p) => Math.max(p.down, p.up))) * 1.15)
 
   const dlPath = $derived(timeSeriesPath(points, 'down', start, end, 0, w, 0, h, maxVal))
   const ulPath = $derived(timeSeriesPath(points, 'up', start, end, 0, w, 0, h, maxVal))

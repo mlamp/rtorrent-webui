@@ -159,15 +159,15 @@ var migrations = []migration{
 			) WITHOUT ROWID;`)
 		return err
 	}},
-	{4, "global series → payload running counter", func(tx *sql.Tx) error {
-		// The global ('') series used to store throttle.global_*.total (cumulative,
-		// but INCLUDING BitTorrent protocol overhead), so its derived rate read higher
-		// than the payload-only per-torrent sum and showed phantom "download" while
-		// pure-seeding. It now stores a payload running counter (Σ per-torrent deltas).
-		// The two are not comparable, so deriving a rate across the switchover boundary
-		// would emit a bogus spike. Drop the stale '' rows from the short tiers we still
-		// query at fine resolution; the coarse 1h/1d tiers age out within a week and the
-		// seam there is invisible. Per-torrent ('AAA'…) rows are untouched.
+	{4, "trim stale global rows from a reverted units change", func(tx *sql.Tx) error {
+		// Released in 2026.06.8: a build briefly switched the global ('') series from
+		// throttle.global_*.total to a payload running counter — a units change that was
+		// incompatible with existing history and was reverted in the next build (the
+		// global series is throttle totals again). This DELETE is a one-time trim of the
+		// fine-resolution '' rows around that churn so the derived rate doesn't cross an
+		// incompatible boundary; with throttle restored it's a harmless history trim that
+		// re-accumulates. Per-torrent ('AAA'…) rows are untouched. (Migration logic is
+		// frozen once released — do not edit.)
 		_, err := tx.Exec(`DELETE FROM samples WHERE hash='' AND res IN ('raw','1m')`)
 		return err
 	}},
@@ -286,14 +286,6 @@ func New(path string) (*Store, error) {
 		log.Printf("history: schema migrated v%d -> v%d", from, to)
 	}
 	s := &Store{db: db, last: map[string][2]int64{}, now: func() int64 { return time.Now().Unix() }}
-	// Seed the global payload accumulator from the last stored "" raw sample so the
-	// running counter continues across restarts. The absolute baseline is immaterial
-	// (rates derive from deltas); we just need a non-zero starting point so the first
-	// post-restart tick produces a sane delta rather than a spike from 0.
-	var gd, gu int64
-	if err := db.QueryRow(`SELECT down, up FROM samples WHERE res='raw' AND hash='' ORDER BY ts DESC LIMIT 1`).Scan(&gd, &gu); err == nil {
-		s.last[""] = [2]int64{gd, gu}
-	}
 	go s.maintainLoop()
 	return s, nil
 }
@@ -331,29 +323,13 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 		}
 	}
 
-	// Global "" series = a PAYLOAD running counter, matching the live "sum of all
-	// torrents" rate (g.DownTotal/UpTotal are throttle totals that also count protocol
-	// overhead, so they're intentionally NOT used here). Sum each torrent's positive
-	// payload delta since its last sample and add to the previous global total. This
-	// MUST run before the per-torrent writes below mutate s.last. A newly-seen torrent
-	// (absent from s.last) contributes 0 this tick, so adding a half-done torrent does
-	// not spike the global graph; per-torrent resets clamp to 0 so the global counter
-	// only moves forward. The "" row stays cumulative, so dedup + rollup + derive all
-	// keep working.
-	var dDown, dUp int64
-	for _, t := range torrents {
-		if prev, ok := s.last[t.Hash]; ok {
-			if d := t.Completed - prev[0]; d > 0 {
-				dDown += d
-			}
-			if u := t.UpTotal - prev[1]; u > 0 {
-				dUp += u
-			}
-		}
-	}
-	gp := s.last[""]
-	write("", gp[0]+dDown, gp[1]+dUp)
-
+	// Global "" series = the session throttle totals (network bytes incl. protocol
+	// overhead). This is a real cumulative counter, so dedup + rollup + derive all work
+	// the same as the per-torrent series. (An earlier build briefly stored a payload
+	// running counter here; that changed units mid-stream and was incompatible with
+	// existing history, so it was reverted — the reactive payload "sum of torrents"
+	// now lives in the live sidebar buffer instead.)
+	write("", g.DownTotal, g.UpTotal)
 	for _, t := range torrents {
 		write(t.Hash, t.Completed, t.UpTotal)
 	}
@@ -555,13 +531,19 @@ func resampleGrid(samples []Point, start, end, step int64) []Point {
 	}
 	// Monotonic cursor: cumAt(x) returns the last cumulative value with ts <= x,
 	// carrying forward. Called with non-decreasing x (start-step, start, start+step…).
+	// Before the first sample we carry the first value BACKWARD (not 0): we have no
+	// data there, so the rate must read 0 — returning 0 would instead make the first
+	// slot derive the whole cumulative total as one giant delta-from-zero spike.
 	j := 0
 	cumAt := func(x int64) (int64, int64) {
 		for j < len(samples) && samples[j].TS <= x {
 			j++
 		}
 		if j == 0 {
-			return 0, 0 // before the first sample — nothing transferred yet
+			if len(samples) == 0 {
+				return 0, 0 // no data at all → flat zero
+			}
+			return samples[0].Down, samples[0].Up // carry first value back ⇒ rate 0 before it
 		}
 		return samples[j-1].Down, samples[j-1].Up
 	}

@@ -1,4 +1,4 @@
-import { monotonePath, type Pt } from '../src/lib/charts.ts'
+import { monotonePath, timeSeriesPath, niceMax, type Pt } from '../src/lib/charts.ts'
 
 let pass = 0, fail = 0
 function ok(name: string, cond: boolean, detail = '') {
@@ -102,6 +102,34 @@ finitePath('interp path is finite', monotonePath(chartPts([3e6, 9e6, 1e6, 0, 14e
 // Duplicate consecutive x (h == 0 in slope3/slope2) must not divide-by-zero into
 // NaN coordinates — exercises the ternary guards on a vertical segment.
 finitePath('duplicate-x path is finite', monotonePath([[0, 0], [0, 10], [1, 15]]))
+
+// ── timeSeriesPath (time-based mapping shared by the charts) ──────────────────
+// Degenerate windows draw nothing (caller falls back to a baseline).
+eq('tsp empty', timeSeriesPath([], 'down', 0, 10, 0, 100, 0, 50, 1), '')
+eq('tsp single point', timeSeriesPath([{ t: 5, down: 1 }], 'down', 0, 10, 0, 100, 0, 50, 1), '')
+eq('tsp zero-span window', timeSeriesPath([{ t: 5, down: 1 }, { t: 5, down: 2 }], 'down', 5, 5, 0, 100, 0, 50, 1), '')
+
+// An all-zero series over a valid window must draw a NON-empty flat line pinned to
+// the baseline (y = y0 + plotH) — the "0 line" the chart must always show when idle,
+// never a blank/absent path.
+{
+  const d = timeSeriesPath([{ t: 0, down: 0 }, { t: 5, down: 0 }, { t: 10, down: 0 }], 'down', 0, 10, 0, 100, 0, 50, 1)
+  ok('tsp all-zero is drawn (non-empty)', d !== '', `got ${JSON.stringify(d)}`)
+  const ys = samplePath(d).map(([, y]) => y)
+  ok('tsp all-zero sits on the baseline', ys.every((y) => Math.abs(y - 50) < EPS), `ys [${Math.min(...ys)}, ${Math.max(...ys)}] want 50`)
+}
+
+// X is mapped by TIME, not index: an early then a late sample over [0,10] land at the
+// left and right edges regardless of count.
+{
+  const d = timeSeriesPath([{ t: 1, down: 0 }, { t: 9, down: 0 }], 'down', 0, 10, 0, 100, 0, 50, 1)
+  ok('tsp maps x by time', d.startsWith('M 10,') , `got ${d.slice(0, 24)}`) // t=1 → x = 100*(1-0)/10 = 10
+}
+
+// niceMax: round binary ceilings; 0 floors to 1 KiB; mid values round up to a step.
+eq('niceMax 0 floors to 1KiB', niceMax(0), 1024)
+eq('niceMax exact 1MiB', niceMax(1 << 20), 1 << 20)
+ok('niceMax rounds 70MiB up to 128MiB', niceMax(70 * (1 << 20)) === 128 * (1 << 20), `got ${niceMax(70 * (1 << 20))}`)
 
 console.log(`charts: ${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

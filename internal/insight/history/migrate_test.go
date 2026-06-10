@@ -27,11 +27,10 @@ func TestMigrateFreshDB(t *testing.T) {
 	if v := userVersion(t, s.db); v != schemaVersion {
 		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
-	// new-schema column exists -> a Sample/Query round-trips (drive the "" payload
-	// series via a per-torrent row, since the global no longer reads g.DownTotal)
+	// new-schema column exists -> a Sample/Query round-trips
 	s.now = func() int64 { return 1001 }
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 0}}, model.Globals{}, 1000)
-	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 << 20}}, model.Globals{}, 1001)
+	s.Sample(nil, model.Globals{DownTotal: 0}, 1000)
+	s.Sample(nil, model.Globals{DownTotal: 1 << 20}, 1001)
 	ser, err := s.Query(context.Background(), 900, "")
 	if err != nil {
 		t.Fatalf("query on fresh db: %v", err)

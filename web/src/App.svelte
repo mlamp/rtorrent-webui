@@ -9,7 +9,7 @@
   import { detail } from '$lib/stores/detail.svelte'
   import { config } from '$lib/stores/config.svelte'
   import { connectSSE } from '$lib/api/sse'
-  import { api, bulk, silentGet } from '$lib/api/client'
+  import { api, bulk } from '$lib/api/client'
   import { short, trackerHost } from '$lib/format'
   import SpeedGraph from './components/SpeedGraph.svelte'
   import TorrentTable from './components/table/TorrentTable.svelte'
@@ -37,16 +37,10 @@
 
   let rtVersion = $state('')
 
-  // Sidebar speed sparkline: fed the global /api/history series (same source +
-  // time-based logic as the insight/detail charts), seeded on load so it's never
-  // empty, refreshed on a slow cadence. The live ↓/↑ numbers stay on the SSE feed
-  // (globals); the graph is 15m of context, so a ≤20s lag is invisible.
-  type HistPoint = { t: number; down: number; up: number }
-  let sidebarHist = $state<{ points: HistPoint[]; start: number; end: number }>({ points: [], start: 0, end: 0 })
-  async function loadSidebarHist() {
-    const d = await silentGet<{ points: HistPoint[]; start: number; end: number }>('/api/history?range=15m')
-    if (d) sidebarHist = { points: d.points ?? [], start: d.start ?? 0, end: d.end ?? 0 }
-  }
+  // Sidebar speed sparkline: a live ~2-minute window fed by the SSE poll (globals.speed),
+  // so it stays snappy/reactive — start/end track the buffer's span.
+  const speedStart = $derived(globals.speed[0]?.t ?? 0)
+  const speedEnd = $derived(globals.speed.at(-1)?.t ?? 0)
 
   onMount(() => {
     const close = connectSSE()
@@ -60,12 +54,7 @@
       .then((r) => r.json())
       .then((j) => (rtVersion = j?.data?.rtorrent ? `rtorrent ${j.data.rtorrent} · api ${j.data.api}` : ''))
       .catch(() => {})
-    loadSidebarHist()
-    const histTimer = setInterval(loadSidebarHist, 20000)
-    return () => {
-      close()
-      clearInterval(histTimer)
-    }
+    return close
   })
 
   // Live up/down speed in the browser tab title (Flood-style). A configured
@@ -281,7 +270,7 @@
               <span class="glow-acc2 text-[18px] font-semibold tracking-[-0.01em]">{short(globals.upRate)}<small>B/s</small></span>
             </div>
           </div>
-          <div class="mt-[11px]"><SpeedGraph points={sidebarHist.points} start={sidebarHist.start} end={sidebarHist.end} /></div>
+          <div class="mt-[11px]"><SpeedGraph points={globals.speed} start={speedStart} end={speedEnd} /></div>
           <div class="mt-2 text-[10.5px] tracking-[0.04em] text-dim">Σ ↓{short(globals.downTotal)} &nbsp; ↑{short(globals.upTotal)}</div>
         </div>
 

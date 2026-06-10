@@ -2,6 +2,11 @@ import type { GlobalsWire } from '$lib/types/torrent'
 
 export type Connection = 'connecting' | 'live' | 'reconnecting' | 'offline'
 
+// Sidebar sparkline window: keep the last ~2 minutes of live samples. Short and
+// per-tick so the sidebar graph stays snappy/reactive (the longer historical view
+// lives in the Insight panel).
+const SPEED_WINDOW_S = 120
+
 class GlobalsState {
   downRate = $state(0)
   upRate = $state(0)
@@ -19,6 +24,11 @@ class GlobalsState {
   // O(n) history array for every torrent.
   tick = $state(0)
 
+  // Live, time-stamped speed samples for the sidebar sparkline — appended every
+  // poll tick and trimmed to the last SPEED_WINDOW_S seconds. Reactive (updates
+  // each tick) and rendered time-based, the same shape the charts use.
+  speed = $state<{ t: number; down: number; up: number }[]>([])
+
   apply(g: GlobalsWire) {
     this.downRate = g.downRate
     this.upRate = g.upRate
@@ -28,6 +38,8 @@ class GlobalsState {
     this.upLimit = g.upLimit
     this.torrentCount = g.torrentCount
     this.activeCount = g.activeCount
+    const t = Math.floor(Date.now() / 1000)
+    this.speed = [...this.speed, { t, down: g.downRate, up: g.upRate }].filter((p) => p.t >= t - SPEED_WINDOW_S)
     this.tick++
   }
 }
