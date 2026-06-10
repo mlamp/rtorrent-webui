@@ -29,3 +29,20 @@ test('detail panel tabs render', async ({ page }) => {
   await expect(page.locator('.rd-trkrow').first().or(page.getByText('no trackers'))).toBeVisible()
   await page.screenshot({ path: 'e2e/screenshots/detail-trackers.png' })
 })
+
+// Mock-only: every third synthetic torrent carries a dead backup tracker, so the
+// TRACKERS tab must render the red "failing" dot + label for it. A live rtorrent
+// has no such fixture, so skip there.
+test('failing tracker renders the red failing state', async ({ page }) => {
+  test.skip(!!process.env.E2E_LIVE, 'failing-tracker fixture is mock-only')
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await expect(page.locator('footer')).toContainText('torrents')
+
+  // hash …0002 == mock torrent index 1 == the first one with a dead backup tracker.
+  await page.locator('[data-torrent="0000000000000000000000000000000000000002"]').click()
+  await page.getByRole('button', { name: 'TRACKERS' }).click()
+  await expect(page.locator('.rd-dot.err')).toBeVisible()
+  await expect(page.locator('.rd-trkrow', { hasText: 'failing' })).toBeVisible()
+  await page.screenshot({ path: 'e2e/screenshots/detail-trackers-failing.png' })
+})

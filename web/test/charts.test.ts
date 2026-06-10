@@ -78,12 +78,30 @@ eq('empty', monotonePath([]), '')
 eq('single point', monotonePath([[5, 5]]), '')
 eq('two points is a line', monotonePath([[0, 10], [10, 0]]), 'M 0,10 L 10,0')
 
-// The curve still interpolates (passes through) every data point.
+// The curve interpolates (passes through) every data point. Sample the emitted
+// cubics and assert a sampled point coincides with each data point within EPS —
+// numeric, not the brittle "does the coordinate substring appear in the path".
 {
   const p = chartPts([3e6, 9e6, 1e6, 0, 14e6], H)
-  const d = monotonePath(p)
-  ok('passes through all points', p.every(([x, y]) => d.includes(`${x},${y}`)), d)
+  const sampled = samplePath(monotonePath(p))
+  const through = p.every(([x, y]) =>
+    sampled.some(([sx, sy]) => Math.abs(sx - x) < EPS && Math.abs(sy - y) < EPS),
+  )
+  ok('passes through all points (numeric)', through)
 }
+
+// The emitted path must never carry NaN/Infinity coordinates — SVG rejects them,
+// and an unguarded division (e.g. a zero-width x segment) is how they'd appear.
+function finitePath(name: string, d: string) {
+  ok(name, d !== '' && !/NaN|Infinity/.test(d), d)
+}
+finitePath('drop path is finite', monotonePath(drop))
+finitePath('spike path is finite', monotonePath(spike))
+finitePath('interp path is finite', monotonePath(chartPts([3e6, 9e6, 1e6, 0, 14e6], H)))
+
+// Duplicate consecutive x (h == 0 in slope3/slope2) must not divide-by-zero into
+// NaN coordinates — exercises the ternary guards on a vertical segment.
+finitePath('duplicate-x path is finite', monotonePath([[0, 0], [0, 10], [1, 15]]))
 
 console.log(`charts: ${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

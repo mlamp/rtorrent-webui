@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
-    "test:unit": "node --experimental-strip-types test/pieces.test.ts && node --experimental-strip-types test/eta.test.ts && node --experimental-strip-types test/peers.test.ts && node --experimental-strip-types test/format.test.ts && node --experimental-strip-types test/charts.test.ts"
+    "test:unit": "node --experimental-strip-types test/pieces.test.ts && node --experimental-strip-types test/eta.test.ts && node --experimental-strip-types test/peers.test.ts && node --experimental-strip-types test/format.test.ts && node --experimental-strip-types test/charts.test.ts && node --experimental-strip-types test/trackers.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

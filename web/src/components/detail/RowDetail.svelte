@@ -15,6 +15,7 @@
   import TrafficChart from '../charts/TrafficChart.svelte'
   import { decodePieces } from '$lib/pieces'
   import { peerFlags } from '$lib/peers'
+  import { trackerFailing } from '$lib/trackers'
 
   let { t, inModal = false }: { t: TorrentRow; inModal?: boolean } = $props()
 
@@ -282,7 +283,7 @@
             <!-- failing = the last announce attempt failed (rtorrent has no per-tracker
                  error text, only counters/timestamps — the message itself lives in the
                  torrent-wide d.message) -->
-            {@const failing = tr.enabled && tr.failed > 0 && tr.failedAt >= tr.successAt}
+            {@const failing = trackerFailing(tr)}
             <div class="rd-trkrow">
               <span class="rd-dot {tr.enabled ? (failing ? 'err' : 'ok') : 'idle'}"></span>
               <span class="rd-trkname truncate font-mono" title={tr.url}>{tr.url}</span>
