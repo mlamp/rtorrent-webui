@@ -1,5 +1,9 @@
 <script lang="ts">
-  // Smooth (Catmull-Rom) area+line speed sparkline, ported from the prototype.
+  // Smooth (monotone-cubic) area+line speed sparkline, ported from the prototype.
+  // Monotone interpolation keeps the curvy look but can't overshoot the data, so
+  // a rate falling to zero hugs the baseline instead of dipping below it.
+  import { monotonePath } from '$lib/charts'
+
   let {
     dl = [],
     ul = [],
@@ -28,26 +32,10 @@
   function pts(arr: number[]): [number, number][] {
     return arr.map((v, i) => [(i / Math.max(1, arr.length - 1)) * w, h - (v / max) * h])
   }
-  function smooth(p: [number, number][]): string {
-    if (p.length < 2) return ''
-    let d = `M ${p[0][0]},${p[0][1]}`
-    for (let i = 0; i < p.length - 1; i++) {
-      const p0 = p[i - 1] || p[i]
-      const p1 = p[i]
-      const p2 = p[i + 1]
-      const p3 = p[i + 2] || p2
-      const c1x = p1[0] + (p2[0] - p0[0]) / 6
-      const c1y = p1[1] + (p2[1] - p0[1]) / 6
-      const c2x = p2[0] - (p3[0] - p1[0]) / 6
-      const c2y = p2[1] - (p3[1] - p1[1]) / 6
-      d += ` C ${c1x},${c1y} ${c2x},${c2y} ${p2[0]},${p2[1]}`
-    }
-    return d
-  }
 
-  const dlPath = $derived(smooth(pts(dl)))
+  const dlPath = $derived(monotonePath(pts(dl)))
   const dlArea = $derived(dlPath ? `${dlPath} L ${w},${h} L 0,${h} Z` : '')
-  const ulPath = $derived(ul && ul.length > 1 ? smooth(pts(ul)) : '')
+  const ulPath = $derived(ul && ul.length > 1 ? monotonePath(pts(ul)) : '')
 </script>
 
 <div bind:clientWidth={w} style="color:var(--primary)">

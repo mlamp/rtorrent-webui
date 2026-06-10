@@ -4,6 +4,7 @@
   // INSIGHT traffic panel and the per-torrent detail graph — both feed it real
   // {t,down,up} points from /api/history (per-torrent when a hash is passed).
   import { short } from '$lib/format'
+  import { monotonePath } from '$lib/charts'
 
   type Point = { t: number; down: number; up: number }
   // Note: the X axis resolution derives from the actual data span (points[].t),
@@ -79,21 +80,11 @@
     })
   })
 
-  // ── smooth (Catmull-Rom) paths ──────────────────────────────────────────────
+  // ── smooth (monotone-cubic) paths — can't overshoot, so a rate dropping to
+  // zero never draws below the axis ───────────────────────────────────────────
   function smooth(key: 'down' | 'up'): string {
     if (n < 2) return ''
-    const p = points.map((pt, i) => [xOf(i), yOf(pt[key])] as [number, number])
-    let d = `M ${p[0][0]},${p[0][1]}`
-    for (let i = 0; i < p.length - 1; i++) {
-      const p0 = p[i - 1] || p[i]
-      const p1 = p[i]
-      const p2 = p[i + 1]
-      const p3 = p[i + 2] || p2
-      d += ` C ${p1[0] + (p2[0] - p0[0]) / 6},${p1[1] + (p2[1] - p0[1]) / 6} ${
-        p2[0] - (p3[0] - p1[0]) / 6
-      },${p2[1] - (p3[1] - p1[1]) / 6} ${p2[0]},${p2[1]}`
-    }
-    return d
+    return monotonePath(points.map((pt, i) => [xOf(i), yOf(pt[key])] as [number, number]))
   }
   const dlPath = $derived(smooth('down'))
   const ulPath = $derived(smooth('up'))
