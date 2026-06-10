@@ -525,6 +525,17 @@ func (s *Store) fetchSamples(ctx context.Context, res, hash string, start, step 
 // at `step` seconds: for each slot g, rate = max(0, C(g)-C(g-step))/step where C(g)
 // is the last cumulative value at or before g (carry-forward). An idle slot (C
 // unchanged) reads 0; a counter reset clamps to 0. samples must be ascending by ts.
+// maxRateBytesPerSec caps a single grid slot's derived rate. A cumulative-counter
+// delta implying a sustained rate above this is not torrent traffic — it's a counter
+// RE-BASELINE: an rtorrent restart (session totals reset), a change in what the
+// webui stores in the counter between versions, or a wrap. Like a negative delta
+// (a reset), such a delta is clamped to 0 so a baseline step never renders as an
+// absurd spike (the 2026.06.8→.9 incident showed 40+ GB/s). ~16 GiB/s is far above
+// any real link — a saturated 100 GbE is ~12 GB/s — so real traffic is never clipped.
+// This also hides any already-stored bad-baseline rows at render time, no migration
+// needed.
+const maxRateBytesPerSec = 16 << 30
+
 func resampleGrid(samples []Point, start, end, step int64) []Point {
 	if step <= 0 || end < start {
 		return nil
@@ -549,13 +560,16 @@ func resampleGrid(samples []Point, start, end, step int64) []Point {
 	}
 	out := make([]Point, 0, (end-start)/step+1)
 	prevDown, prevUp := cumAt(start - step)
+	maxDelta := step * maxRateBytesPerSec // largest plausible delta for this grid step
 	for g := start; g <= end; g += step {
 		cd, cu := cumAt(g)
 		dd, du := cd-prevDown, cu-prevUp
-		if dd < 0 {
+		// A negative delta is a counter reset; an implausibly large one is a
+		// re-baseline. Both are non-traffic discontinuities → clamp to 0.
+		if dd < 0 || dd > maxDelta {
 			dd = 0
 		}
-		if du < 0 {
+		if du < 0 || du > maxDelta {
 			du = 0
 		}
 		out = append(out, Point{TS: g, Down: dd / step, Up: du / step})

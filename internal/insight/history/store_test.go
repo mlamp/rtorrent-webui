@@ -310,6 +310,51 @@ func TestNoSpuriousSpikeAtFirstSample(t *testing.T) {
 	}
 }
 
+// A cumulative-counter RE-BASELINE mid-series (rtorrent restart, a webui counter-
+// source change between versions, or a counter wrap) must NOT render as an absurd
+// rate spike. This reproduces the 2026.06.8→.9 incident: the global counter's source
+// changed, so the 1h/1d tiers held old-baseline values and the first new sample
+// jumped +168 GB in one step — which rendered as 40+ GB/s. Such a delta implies a
+// rate no real link can sustain, so (like a negative reset) it must clamp to 0.
+func TestNoSpikeOnCounterRebaseline(t *testing.T) {
+	s, err := New(t.TempDir() + "/rebaseline.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const base = 1_700_000_000
+	const GB = 1 << 30
+	const MB = 1 << 20
+	now := int64(base + 20)
+	s.now = func() int64 { return now }
+
+	// Old baseline counter climbing at a real ~1 MiB/s, then a restart/version change
+	// RE-BASELINES it by +168 GB in one step, then real ~1 MiB/s resumes.
+	s.Sample(nil, model.Globals{DownTotal: 10 * GB}, base+5)
+	s.Sample(nil, model.Globals{DownTotal: 10*GB + MB}, base+6)
+	s.Sample(nil, model.Globals{DownTotal: 178 * GB}, base+10)      // +168 GB step (re-baseline)
+	s.Sample(nil, model.Globals{DownTotal: 178*GB + MB}, base+11)   // real ~1 MiB/s again
+
+	ser, err := s.Query(context.Background(), 20, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ser.Points {
+		if p.Down > 64*MB { // real rate is ~1 MiB/s; the 168 GB step would be tens of GB/s
+			t.Fatalf("counter re-baseline rendered as a spike: %d B/s at %d", p.Down, p.TS)
+		}
+	}
+	var sawReal bool
+	for _, p := range ser.Points {
+		if p.Down >= MB*8/10 && p.Down <= 2*MB {
+			sawReal = true
+		}
+	}
+	if !sawReal {
+		t.Fatal("the real ~1 MiB/s rate must survive the clamp")
+	}
+}
+
 // Gauges are stored as instantaneous values and rolled up by AVERAGE (not the
 // last-value-wins of the cumulative `samples` tier), and queried back without any
 // rate derivation.
