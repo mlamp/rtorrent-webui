@@ -2,20 +2,29 @@
   // Relay-styled traffic chart: smooth down area + up line, labelled X/Y axes,
   // and a hover crosshair with a date/time + rate tooltip. Shared by the global
   // INSIGHT traffic panel and the per-torrent detail graph — both feed it real
-  // {t,down,up} points from /api/history (per-torrent when a hash is passed).
+  // {t,down,up} points from /api/history PLUS the server window [start,end].
+  // X is mapped by TIME (the server window, not array index / data extrema), so
+  // zero-filled idle slots sit at their true position and an idle series renders
+  // a flat zero line across the whole window.
   import { short } from '$lib/format'
-  import { monotonePath } from '$lib/charts'
+  import { timeSeriesPath, niceMax } from '$lib/charts'
 
   type Point = { t: number; down: number; up: number }
-  // Note: the X axis resolution derives from the actual data span (points[].t),
-  // not from a requested range — a "1y" request that returns a day of data is
-  // labelled in days. So there is intentionally no `range` prop here.
   let {
     points = [],
+    start = 0,
+    end = 0,
     height = 220,
     dlColor = 'var(--status-download)',
     ulColor = 'var(--status-seed)',
-  }: { points?: Point[]; height?: number; dlColor?: string; ulColor?: string } = $props()
+  }: {
+    points?: Point[]
+    start?: number
+    end?: number
+    height?: number
+    dlColor?: string
+    ulColor?: string
+  } = $props()
 
   let w = $state(700)
   let hover = $state<number | null>(null)
@@ -29,26 +38,14 @@
   const plotH = $derived(Math.max(1, height - padT - padB))
   const n = $derived(points.length)
 
-  // ── value (Y) axis ────────────────────────────────────────────────────────
-  function niceMax(m: number): number {
-    if (m <= 0) return 1024
-    const k = Math.floor(Math.log(m) / Math.log(1024))
-    const unit = Math.pow(1024, k)
-    const f = m / unit
-    const steps = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-    return (steps.find((s) => f <= s) ?? 1024) * unit
-  }
+  // ── value (Y) axis ─ niceMax shared with the sidebar sparkline ──────────────
   const maxVal = $derived(niceMax(Math.max(...points.map((p) => Math.max(p.down, p.up)), 1)))
   const yTicks = $derived([0, 0.25, 0.5, 0.75, 1].map((f) => ({ f, v: maxVal * f })))
 
-  // ── time (X) axis ─ derived from the actual data span (handles tier fallback
-  // and short-history torrents: a "1y" request that only holds a day of data
-  // labels a day, not a year).
-  const t0 = $derived(n ? points[0].t : 0)
-  const t1 = $derived(n ? points[n - 1].t : 1)
-  const span = $derived(Math.max(1, t1 - t0))
-
-  const xOf = (i: number) => padL + (n < 2 ? 0 : (plotW * i) / (n - 1))
+  // ── time (X) axis ─ the window is the server-dictated [start, end], NOT the
+  // data extrema, so a sparse/idle series still spans the full width.
+  const span = $derived(Math.max(1, end - start))
+  const xOf = (t: number) => (end > start ? padL + (plotW * (t - start)) / (end - start) : padL)
   const yOf = (v: number) => padT + plotH - (Math.min(v, maxVal) / maxVal) * plotH
 
   function pad2(x: number) {
@@ -70,44 +67,51 @@
     const date = span > 24 * 3600 ? `${MON[d.getMonth()]} ${d.getDate()} ` : ''
     return `${date}${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
   }
-  // ~5 evenly-spaced X ticks by index
+  // ~5 evenly-spaced X ticks across the window (by time)
   const xTicks = $derived.by(() => {
-    if (n < 2) return [] as { x: number; label: string }[]
-    const count = Math.min(5, n)
+    if (end <= start) return [] as { x: number; label: string }[]
+    const count = 5
     return Array.from({ length: count }, (_, k) => {
-      const i = Math.round((k * (n - 1)) / (count - 1))
-      return { x: xOf(i), label: axisLabel(points[i].t) }
+      const t = start + (span * k) / (count - 1)
+      return { x: xOf(t), label: axisLabel(t) }
     })
   })
 
-  // ── smooth (monotone-cubic) paths — can't overshoot, so a rate dropping to
-  // zero never draws below the axis ───────────────────────────────────────────
-  function smooth(key: 'down' | 'up'): string {
-    if (n < 2) return ''
-    return monotonePath(points.map((pt, i) => [xOf(i), yOf(pt[key])] as [number, number]))
-  }
-  const dlPath = $derived(smooth('down'))
-  const ulPath = $derived(smooth('up'))
-  const dlArea = $derived(dlPath ? `${dlPath} L ${xOf(n - 1)},${padT + plotH} L ${padL},${padT + plotH} Z` : '')
+  // ── smooth (monotone-cubic) paths via the shared helper — can't overshoot, so
+  // a rate dropping to zero never draws below the axis ─────────────────────────
+  const dlPath = $derived(timeSeriesPath(points, 'down', start, end, padL, plotW, padT, plotH, maxVal))
+  const ulPath = $derived(timeSeriesPath(points, 'up', start, end, padL, plotW, padT, plotH, maxVal))
+  const dlArea = $derived(dlPath ? `${dlPath} L ${xOf(end)},${padT + plotH} L ${padL},${padT + plotH} Z` : '')
 
   const uid = 'tc' + Math.random().toString(36).slice(2, 7)
 
-  // ── hover ─────────────────────────────────────────────────────────────────
+  // ── hover ─ invert pointer x → time → nearest sample by time ────────────────
   function onMove(e: MouseEvent) {
-    if (!svgEl || n < 1) return
+    if (!svgEl || n < 1 || end <= start) return
     const r = svgEl.getBoundingClientRect()
     const x = ((e.clientX - r.left) * w) / r.width
-    const i = Math.round(((x - padL) / plotW) * (n - 1))
-    hover = Math.max(0, Math.min(n - 1, i))
+    const tt = start + ((x - padL) / plotW) * (end - start)
+    let best = 0
+    let bd = Infinity
+    for (let i = 0; i < n; i++) {
+      const d = Math.abs(points[i].t - tt)
+      if (d < bd) {
+        bd = d
+        best = i
+      }
+    }
+    hover = best
   }
   const hp = $derived(hover !== null && points[hover] ? points[hover] : null)
   // keep the tooltip inside the plot
-  const tipX = $derived(hover === null ? 0 : Math.max(padL, Math.min(w - padR - 132, xOf(hover) + 10)))
+  const tipX = $derived(hp ? Math.max(padL, Math.min(w - padR - 132, xOf(hp.t) + 10)) : 0)
 </script>
 
 <div bind:clientWidth={w} class="relative" style="color:var(--primary)">
   {#if n < 2}
-    <div class="grid place-items-center text-dim" style="height:{height}px">// collecting data…</div>
+    <!-- pre-first-fetch only: the server returns a dense zero-filled grid, so an
+         idle torrent renders a flat 0 line rather than landing here -->
+    <div style="height:{height}px"></div>
   {:else}
     <svg
       bind:this={svgEl}
@@ -154,7 +158,7 @@
 
       <!-- hover crosshair + markers -->
       {#if hp && hover !== null}
-        {@const hx = xOf(hover)}
+        {@const hx = xOf(hp.t)}
         <line x1={hx} y1={padT} x2={hx} y2={padT + plotH} stroke="currentColor" stroke-opacity="0.35" stroke-dasharray="3 3" />
         <circle cx={hx} cy={yOf(hp.down)} r="3" fill={dlColor} stroke="var(--background)" stroke-width="1.5" />
         <circle cx={hx} cy={yOf(hp.up)} r="3" fill={ulColor} stroke="var(--background)" stroke-width="1.5" />

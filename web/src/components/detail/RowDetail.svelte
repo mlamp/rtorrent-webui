@@ -15,6 +15,22 @@
   let { t }: { t: TorrentRow } = $props()
 
   const paused = $derived(t.status === 'stopped' || t.status === 'paused')
+
+  // peers tab: sortable by speed (down/up), default down-desc. detail.peers is
+  // replaced wholesale every 3s by refreshActive(), so a $derived sorted view
+  // re-applies cleanly without flicker.
+  let peerSort = $state<{ key: 'downRate' | 'upRate'; dir: 1 | -1 }>({ key: 'downRate', dir: -1 })
+  const sortedPeers = $derived([...detail.peers].sort((a, b) => (a[peerSort.key] - b[peerSort.key]) * peerSort.dir))
+  function sortPeers(key: 'downRate' | 'upRate') {
+    peerSort = peerSort.key === key ? { key, dir: peerSort.dir === 1 ? -1 : 1 } : { key, dir: -1 }
+  }
+
+  // trackers tab: the torrent-wide d.message is rtorrent's LAST failure text and can
+  // linger after recovery — only colour it as a warning/error while a tracker is
+  // actually failing (or the torrent is in an error state, e.g. a rejection). While
+  // trackers are still loading (none fetched yet), leave it coloured rather than
+  // prematurely dimming a possibly-real failure.
+  const messageActive = $derived(t.status === 'error' || detail.trackers.length === 0 || detail.trackers.some(trackerFailing))
   // Piece counts: prefer the /pieces fetch's own counts so the map and the legend
   // always agree (same snapshot); fall back to the live SSE chunk fields until that
   // fetch lands.
@@ -44,6 +60,8 @@
 
   let range = $state('1h')
   let points = $state<Point[]>([])
+  let winStart = $state(0) // server-dictated grid window [start, end] for the X axis
+  let winEnd = $state(0)
   let firstTS = $state(0) // earliest sample we hold for this torrent (0 = unknown)
   let now = $state(Date.now()) // re-stamped each poll so `enabled` re-evaluates as the torrent ages
 
@@ -71,11 +89,13 @@
     const wantRange = range,
       wantHash = t.hash
     now = Date.now()
-    const d = await silentGet<{ points: Point[]; first: number }>(
+    const d = await silentGet<{ points: Point[]; first: number; start: number; end: number }>(
       `/api/history?range=${wantRange}&hash=${wantHash}`,
     )
     if (seq !== reqSeq || wantRange !== range || wantHash !== t.hash || !d) return // stale
     points = d.points ?? []
+    winStart = d.start ?? 0
+    winEnd = d.end ?? 0
     if (d.first) firstTS = d.first
   }
 
@@ -120,8 +140,26 @@
 
 
   async function copyHash() {
+    // navigator.clipboard exists only in a secure context (https / localhost); over
+    // plain http it's undefined, so fall back to a hidden-textarea execCommand. The
+    // fallback MUST run synchronously on a focused+selected element — keep it out of
+    // the async clipboard branch.
     try {
-      await navigator.clipboard.writeText(t.hash)
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(t.hash)
+      } else {
+        const ta = document.createElement('textarea')
+        ta.value = t.hash
+        ta.style.position = 'fixed'
+        ta.style.top = '0'
+        ta.style.opacity = '0'
+        document.body.appendChild(ta)
+        ta.focus()
+        ta.select()
+        const ok = document.execCommand('copy')
+        document.body.removeChild(ta)
+        if (!ok) throw new Error('execCommand copy rejected')
+      }
       toast.success('Infohash copied')
     } catch {
       toast.error('Copy failed')
@@ -160,7 +198,6 @@
         <button class="rd-btn" onclick={() => act(paused ? 'resume' : 'pause')}>{paused ? '▶ RESUME' : '⏸ PAUSE'}</button>
         <button class="rd-btn" onclick={() => act('recheck')}>⟳ RECHECK</button>
         <button class="rd-btn danger" onclick={() => act('remove')}>✕ REMOVE</button>
-        <button class="rd-btn" onclick={() => detail.close()} aria-label="close">✕</button>
       </div>
     </div>
 
@@ -197,7 +234,7 @@
           {/each}
         </div>
       </div>
-      <TrafficChart {points} height={150} dlColor="var(--status-download)" ulColor="var(--status-seed)" />
+      <TrafficChart {points} start={winStart} end={winEnd} height={150} dlColor="var(--status-download)" ulColor="var(--status-seed)" />
     </div>
 
     <div class="rd-tabs">
@@ -256,18 +293,24 @@
       {#if detail.peers.length === 0}
         <p class="text-dim">{detail.loading ? 'loading…' : 'no connected peers'}</p>
       {:else}
+        {@const cols = 'grid-template-columns:32px 110px 1fr 70px 60px 60px 60px 46px'}
         <div class="flex flex-col gap-px">
-          <div class="grid items-center gap-3 px-2 pb-1.5 text-[9.5px] uppercase tracking-[0.1em] text-dim" style="grid-template-columns:32px 130px 1fr 70px 64px 64px 52px">
-            <span>cc</span><span>address</span><span>client</span><span>flags</span><span class="text-right">↓</span><span class="text-right">↑</span><span class="text-right">done</span>
+          <div class="grid items-center gap-3 px-2 pb-1.5 text-[9.5px] uppercase tracking-[0.1em] text-dim" style={cols}>
+            <span>cc</span><span>address</span><span>client</span><span>flags</span>
+            <!-- ↓/↑ headers sort the peer list by speed; ↓ desc by default -->
+            <button type="button" class="rd-sort" class:on={peerSort.key === 'downRate'} onclick={() => sortPeers('downRate')}>↓{peerSort.key === 'downRate' ? (peerSort.dir === -1 ? '▾' : '▴') : ''}</button>
+            <button type="button" class="rd-sort" class:on={peerSort.key === 'upRate'} onclick={() => sortPeers('upRate')}>↑{peerSort.key === 'upRate' ? (peerSort.dir === -1 ? '▾' : '▴') : ''}</button>
+            <span class="text-right" title="total downloaded from this peer">got</span><span class="text-right">done</span>
           </div>
-          {#each detail.peers as p (p.address + ':' + p.port)}
-            <div class="grid items-center gap-3 rounded-sm px-2 py-1 text-[11.5px] hover:bg-[color-mix(in_srgb,var(--primary)_4%,transparent)]" style="grid-template-columns:32px 130px 1fr 70px 64px 64px 52px">
+          {#each sortedPeers as p (p.address + ':' + p.port)}
+            <div class="grid items-center gap-3 rounded-sm px-2 py-1 text-[11.5px] hover:bg-[color-mix(in_srgb,var(--primary)_4%,transparent)]" style={cols}>
               <span class="rd-cc"><CountryFlag code={p.country} /></span>
               <span class="truncate font-mono" title={p.address}>{p.address}</span>
               <span class="truncate text-dim2" title={p.client}>{p.client}</span>
               <span class="rd-flags font-mono">{peerFlags(p)}</span>
-              <span class="text-right font-mono" style="color:{p.downRate ? 'var(--primary)' : 'var(--dim)'}">{p.downRate ? short(p.downRate) : '—'}</span>
-              <span class="text-right font-mono" style="color:{p.upRate ? 'var(--acc2)' : 'var(--dim)'}">{p.upRate ? short(p.upRate) : '—'}</span>
+              <span class="text-right font-mono" style="color:{p.downRate ? 'var(--primary)' : 'var(--dim)'}">{#if p.downRate}{short(p.downRate)}<small class="opacity-60">B/s</small>{:else}—{/if}</span>
+              <span class="text-right font-mono" style="color:{p.upRate ? 'var(--acc2)' : 'var(--dim)'}">{#if p.upRate}{short(p.upRate)}<small class="opacity-60">B/s</small>{:else}—{/if}</span>
+              <span class="text-right font-mono" style="color:{p.downTotal ? 'var(--foreground)' : 'var(--dim)'}" title="downloaded from this peer">{#if p.downTotal}{short(p.downTotal)}<small class="opacity-60">B</small>{:else}—{/if}</span>
               <span class="text-right font-mono">{p.progress}%</span>
             </div>
           {/each}
@@ -278,7 +321,7 @@
            TEXT (per-tracker state is counters only) — surface it here next to the
            per-tracker rows that say which tracker it came from -->
       {#if t.message}
-        <div class="mb-2 truncate font-mono text-[11px]" style="color:{t.status === 'error' ? 'var(--status-error)' : 'var(--status-check)'}" title={t.message}>{t.message}</div>
+        <div class="mb-2 truncate font-mono text-[11px]" style="color:{messageActive ? (t.status === 'error' ? 'var(--status-error)' : 'var(--status-check)') : 'var(--dim)'}" title={t.message}>{t.message}</div>
       {/if}
       {#if detail.trackers.length === 0}
         <p class="text-dim">{detail.loading ? 'loading…' : 'no trackers'}</p>

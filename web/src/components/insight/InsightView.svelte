@@ -10,13 +10,19 @@
   type GPoint = { t: number; v: number }
   let range = $state('1h')
   let points = $state<Point[]>([])
+  let winStart = $state(0) // server-dictated grid window [start, end] for the X axis
+  let winEnd = $state(0)
   let disks = $state<{ path: string; total: number; free: number; used: number }[]>([])
   let metrics = $state<Record<string, GPoint[]>>({})
   const ranges = ['15m', '1h', '6h', '24h', '7d']
 
   async function loadHistory() {
-    const d = await silentGet<{ points: Point[] }>(`/api/history?range=${range}`)
-    if (d) points = d.points ?? []
+    const d = await silentGet<{ points: Point[]; start: number; end: number }>(`/api/history?range=${range}`)
+    if (d) {
+      points = d.points ?? []
+      winStart = d.start ?? 0
+      winEnd = d.end ?? 0
+    }
   }
   async function loadMetrics() {
     const d = await silentGet<Record<string, GPoint[]>>(`/api/metrics?range=${range}`)
@@ -75,7 +81,7 @@
         {/each}
       </div>
     </div>
-    <TrafficChart {points} height={300} />
+    <TrafficChart {points} start={winStart} end={winEnd} height={300} />
   </section>
 
   <div class="ip-metrics">

@@ -86,7 +86,6 @@
 
   <div class="flex min-w-0 items-center gap-2">
     <span class="w-3 shrink-0 text-center text-[11px]" style="color:{SEGVAR[t.status]}">{MARK[t.status]}</span>
-    <span class="shrink-0 text-[14px] leading-none transition-transform duration-200 {open ? 'rotate-90 text-primary' : 'text-dim'}">›</span>
     <span class="truncate text-[12.5px]" style="color:var(--foreground)">{t.name}</span>
     {#if t.label}
       <span class="ml-1 shrink-0 rounded-sm border border-line px-1.5 text-[10px] text-acc2">{t.label}</span>
@@ -114,8 +113,8 @@
 
   <!-- RATE: morphs between two compact lines / one enlarged solo line / muted idle -->
   <div class="rate rate-{dirs}">
-    <span class="ln d {t.downRate > 0 ? 'on' : 'off'} {dirs === 1 && t.downRate > 0 ? 'solo' : ''}">↓{short(t.downRate)}</span>
-    <span class="ln u {t.upRate > 0 ? 'on' : 'off'} {dirs === 1 && t.upRate > 0 ? 'solo' : ''}">↑{short(t.upRate)}</span>
+    <span class="ln d {t.downRate > 0 ? 'on' : 'off'} {dirs === 1 && t.downRate > 0 ? 'solo' : ''}">↓{short(t.downRate)}<small>B/s</small></span>
+    <span class="ln u {t.upRate > 0 ? 'on' : 'off'} {dirs === 1 && t.upRate > 0 ? 'solo' : ''}">↑{short(t.upRate)}<small>B/s</small></span>
     <span class="ln idle {dirs === 0 ? 'on solo' : 'off'}">idle</span>
   </div>
 

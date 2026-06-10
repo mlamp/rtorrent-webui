@@ -30,6 +30,48 @@ function slope2(a: Pt, b: Pt, t: number): number {
   return h ? (3 * (b[1] - a[1])) / h / 2 - t / 2 : t
 }
 
+/**
+ * "Nice" round Y-axis maximum in binary (1024) units: the smallest of
+ * {1,2,4,…,1024}×1024^k that covers `m`. Shared by every rate chart so the
+ * vertical scale reads the same everywhere. 0/negative → 1 KiB floor.
+ */
+export function niceMax(m: number): number {
+  if (m <= 0) return 1024
+  const k = Math.floor(Math.log(m) / Math.log(1024))
+  const unit = Math.pow(1024, k)
+  const f = m / unit
+  const steps = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+  return (steps.find((s) => f <= s) ?? 1024) * unit
+}
+
+/**
+ * Smooth (monotone-cubic) path for one `{t, …}` series over a fixed time window
+ * [start, end], scaled into the plot box at offset (x0, y0) sized plotW×plotH.
+ * X is mapped by TIME (not array index), so an idle/sparse series sits at its true
+ * position; Y is clamped to maxVal. Returns '' for < 2 points or a zero-width
+ * window. The single implementation shared by the sidebar sparkline and the
+ * full traffic chart so the two can't diverge.
+ */
+export function timeSeriesPath(
+  points: { t: number; [k: string]: number }[],
+  key: 'down' | 'up' | 'v',
+  start: number,
+  end: number,
+  x0: number,
+  plotW: number,
+  y0: number,
+  plotH: number,
+  maxVal: number,
+): string {
+  const span = end - start
+  if (points.length < 2 || span <= 0 || maxVal <= 0) return ''
+  const pts: Pt[] = points.map((p) => [
+    x0 + (plotW * (p.t - start)) / span,
+    y0 + plotH - (Math.min(p[key], maxVal) / maxVal) * plotH,
+  ])
+  return monotonePath(pts)
+}
+
 /** SVG path ("M … C …") through the points; '' for fewer than 2 points. */
 export function monotonePath(p: Pt[]): string {
   const n = p.length

@@ -64,25 +64,27 @@ func (s *Server) handleDiskspace(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if s.history == nil {
-		writeOK(w, map[string]any{"points": []any{}, "first": 0})
+		writeOK(w, map[string]any{"start": 0, "end": 0, "step": 0, "points": []any{}, "first": 0})
 		return
 	}
 	rng := parseRange(r.URL.Query().Get("range"))
 	hash := r.URL.Query().Get("hash")
 	ctx, cancel := reqCtx(r)
 	defer cancel()
-	pts, err := s.history.Query(ctx, rng, hash)
+	series, err := s.history.Query(ctx, rng, hash)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "history_error", err.Error())
 		return
 	}
+	pts := series.Points
 	if pts == nil {
 		pts = []history.Point{}
 	}
-	// Earliest sample we hold for this series, so the client can offer only the
-	// time ranges that have data (e.g. hide "1y" on a day-old torrent).
+	// `first` (earliest sample we hold) lets the client offer only the time ranges
+	// that have data (e.g. hide "1y" on a day-old torrent); `start`/`end`/`step`
+	// give it the grid window to draw against.
 	first, _ := s.history.FirstTS(ctx, hash)
-	writeOK(w, map[string]any{"points": pts, "first": first})
+	writeOK(w, map[string]any{"start": series.Start, "end": series.End, "step": series.Step, "first": first, "points": pts})
 }
 
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {

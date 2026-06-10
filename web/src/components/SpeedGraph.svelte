@@ -1,12 +1,16 @@
 <script lang="ts">
-  // Smooth (monotone-cubic) area+line speed sparkline, ported from the prototype.
-  // Monotone interpolation keeps the curvy look but can't overshoot the data, so
-  // a rate falling to zero hugs the baseline instead of dipping below it.
-  import { monotonePath } from '$lib/charts'
+  // Smooth (monotone-cubic) area+line speed sparkline. Time-based and fed the global
+  // /api/history series ({t,down,up} + window [start,end]) — the SAME data, shape and
+  // path/Y-scale logic as the full TrafficChart (via the shared timeSeriesPath +
+  // niceMax helpers), just compact and axis-less. Idle/missing slots are zero-filled
+  // server-side, so an idle period reads as a flat line on the baseline.
+  import { timeSeriesPath, niceMax } from '$lib/charts'
 
+  type Point = { t: number; down: number; up: number }
   let {
-    dl = [],
-    ul = [],
+    points = [],
+    start = 0,
+    end = 0,
     h = 58,
     dlColor = 'var(--status-download)',
     ulColor = 'var(--status-seed)',
@@ -14,8 +18,9 @@
     grid = true,
     strokeW = 1.6,
   }: {
-    dl?: number[]
-    ul?: number[]
+    points?: Point[]
+    start?: number
+    end?: number
     h?: number
     dlColor?: string
     ulColor?: string
@@ -27,15 +32,11 @@
   let w = $state(246)
   const uid = 'sg' + Math.random().toString(36).slice(2, 8)
 
-  const max = $derived(Math.max(1, ...dl, ...(ul ?? [])) * 1.15)
+  const maxVal = $derived(niceMax(Math.max(...points.map((p) => Math.max(p.down, p.up)), 1)))
 
-  function pts(arr: number[]): [number, number][] {
-    return arr.map((v, i) => [(i / Math.max(1, arr.length - 1)) * w, h - (v / max) * h])
-  }
-
-  const dlPath = $derived(monotonePath(pts(dl)))
+  const dlPath = $derived(timeSeriesPath(points, 'down', start, end, 0, w, 0, h, maxVal))
+  const ulPath = $derived(timeSeriesPath(points, 'up', start, end, 0, w, 0, h, maxVal))
   const dlArea = $derived(dlPath ? `${dlPath} L ${w},${h} L 0,${h} Z` : '')
-  const ulPath = $derived(ul && ul.length > 1 ? monotonePath(pts(ul)) : '')
 </script>
 
 <div bind:clientWidth={w} style="color:var(--primary)">

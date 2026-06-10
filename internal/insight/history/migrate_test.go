@@ -27,15 +27,16 @@ func TestMigrateFreshDB(t *testing.T) {
 	if v := userVersion(t, s.db); v != schemaVersion {
 		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
-	// new-schema column exists -> a Sample/Query round-trips
-	s.now = func() int64 { return 1000 }
-	s.Sample(nil, model.Globals{DownTotal: 0}, 1000)
-	s.Sample(nil, model.Globals{DownTotal: 1 << 20}, 1001)
-	pts, err := s.Query(context.Background(), 900, "")
+	// new-schema column exists -> a Sample/Query round-trips (drive the "" payload
+	// series via a per-torrent row, since the global no longer reads g.DownTotal)
+	s.now = func() int64 { return 1001 }
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 0}}, model.Globals{}, 1000)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 << 20}}, model.Globals{}, 1001)
+	ser, err := s.Query(context.Background(), 900, "")
 	if err != nil {
 		t.Fatalf("query on fresh db: %v", err)
 	}
-	if len(pts) == 0 {
+	if len(ser.Points) == 0 {
 		t.Fatal("expected derived points on fresh db")
 	}
 }
@@ -92,7 +93,7 @@ func TestMigrateUnversionedNewSchemaPreservesData(t *testing.T) {
 		CREATE TABLE samples (res TEXT NOT NULL, hash TEXT NOT NULL, ts INTEGER NOT NULL,
 			down INTEGER NOT NULL, up INTEGER NOT NULL, PRIMARY KEY (res,hash,ts)) WITHOUT ROWID;
 		CREATE TABLE seen (hash TEXT PRIMARY KEY, last_seen INTEGER NOT NULL);
-		INSERT INTO samples(res,hash,ts,down,up) VALUES ('raw','',100, 12345, 678);`); err != nil {
+		INSERT INTO samples(res,hash,ts,down,up) VALUES ('raw','AAA',100, 12345, 678);`); err != nil {
 		t.Fatal(err)
 	}
 	pre.Close()
@@ -105,8 +106,10 @@ func TestMigrateUnversionedNewSchemaPreservesData(t *testing.T) {
 	if v := userVersion(t, s.db); v != schemaVersion {
 		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
 	}
+	// A per-torrent row must survive the 0→current migration walk (the v4 step only
+	// clears the global "" series, never per-torrent data).
 	var down int64
-	if err := s.db.QueryRow(`SELECT down FROM samples WHERE res='raw' AND hash='' AND ts=100`).Scan(&down); err != nil {
+	if err := s.db.QueryRow(`SELECT down FROM samples WHERE res='raw' AND hash='AAA' AND ts=100`).Scan(&down); err != nil {
 		t.Fatalf("pre-existing row must survive migration: %v", err)
 	}
 	if down != 12345 {
@@ -207,5 +210,56 @@ func TestMigrateIdempotent(t *testing.T) {
 	defer s2.Close()
 	if v := userVersion(t, s2.db); v != schemaVersion {
 		t.Fatalf("user_version drifted: %d", v)
+	}
+}
+
+// Migration v4 (throttle→payload global series) must clear the stale global ""
+// rows from the fine tiers (raw/1m) that we query at high resolution, keep the
+// coarse 1h/1d "" rows (they age out within a week), and never touch per-torrent rows.
+func TestMigrateV4ClearsStaleGlobalRows(t *testing.T) {
+	path := t.TempDir() + "/v4.db"
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A v3-shaped DB with throttle-style "" rows across every tier plus a per-torrent
+	// row; user_version=3 so New() runs only the v4 migration.
+	if _, err := db.Exec(`
+		CREATE TABLE samples (res TEXT NOT NULL, hash TEXT NOT NULL, ts INTEGER NOT NULL,
+			down INTEGER NOT NULL, up INTEGER NOT NULL, PRIMARY KEY (res,hash,ts)) WITHOUT ROWID;
+		CREATE TABLE seen (hash TEXT PRIMARY KEY, first_seen INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL);
+		CREATE TABLE metrics (res TEXT NOT NULL, metric TEXT NOT NULL, ts INTEGER NOT NULL, value INTEGER NOT NULL, PRIMARY KEY (res,metric,ts)) WITHOUT ROWID;
+		INSERT INTO samples(res,hash,ts,down,up) VALUES
+			('raw','',1,100,1),('1m','',60,200,2),('1h','',3600,300,3),('1d','',86400,400,4),
+			('raw','AAA',1,10,1);
+		PRAGMA user_version=3;`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v := userVersion(t, s.db); v != schemaVersion {
+		t.Fatalf("user_version = %d, want %d", v, schemaVersion)
+	}
+
+	count := func(res, hash string) int {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM samples WHERE res=? AND hash=?`, res, hash).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if count("raw", "") != 0 || count("1m", "") != 0 {
+		t.Fatalf("v4 must clear raw/1m global rows: raw=%d 1m=%d", count("raw", ""), count("1m", ""))
+	}
+	if count("1h", "") != 1 || count("1d", "") != 1 {
+		t.Fatalf("v4 must keep 1h/1d global rows: 1h=%d 1d=%d", count("1h", ""), count("1d", ""))
+	}
+	if count("raw", "AAA") != 1 {
+		t.Fatal("v4 must not touch per-torrent rows")
 	}
 }

@@ -787,6 +787,15 @@ body {
   font-weight: 400;
   text-shadow: none;
 }
+/* small "B/s" unit suffix — em-relative so it tracks the .ln font-size morph
+   (11.5px compact ↔ 14px solo), matching the sidebar/insight rate styling. */
+.rate .ln small {
+  font-size: 0.78em;
+  font-weight: 400;
+  opacity: 0.55;
+  margin-left: 1px;
+  text-shadow: none;
+}
 
 /* ---- bulk action bar ---- */
 .bulkbar {
@@ -964,6 +973,23 @@ body {
 .rd-flags {
   color: var(--acc2);
   letter-spacing: 0.08em;
+}
+/* clickable ↓/↑ sort headers in the peers table (reset native button chrome) */
+.rd-sort {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: right;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+}
+.rd-sort:hover {
+  color: var(--foreground);
+}
+.rd-sort.on {
+  color: var(--primary);
 }
 
 /* ---- detail: trackers ---- */
@@ -1485,13 +1511,22 @@ body {
 }
 .kbd-hint {
   position: fixed;
-  bottom: 14px;
+  bottom: 40px; /* clear of the 28px status footer */
   right: 18px;
   z-index: 40;
-  font-size: 11px;
-  color: var(--dim);
   display: flex;
   align-items: center;
-  gap: 7px;
-  pointer-events: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+.kbd-hint .kbd {
+  transition:
+    border-color 0.14s,
+    color 0.14s;
+}
+.kbd-hint:hover .kbd {
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  color: var(--foreground);
 }

@@ -67,37 +67,50 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	const base = 1_700_000_000
 	s.now = func() int64 { return base + 13 }
 
-	// Global: cumulative down +1 MiB/s, up +512 KiB/s for 11 ticks.
+	// The global "" series is now a PAYLOAD running counter built from per-torrent
+	// deltas (g.DownTotal is intentionally ignored). Drive one torrent whose payload
+	// climbs +1 MiB/s down, +512 KiB/s up for 11 ticks → the "" series accumulates it.
 	for i := 0; i <= 10; i++ {
-		s.Sample(nil, model.Globals{DownTotal: int64(i) << 20, UpTotal: int64(i) * (512 << 10)}, base+int64(i))
+		s.Sample([]model.Torrent{{Hash: "AAA", Completed: int64(i) << 20, UpTotal: int64(i) * (512 << 10)}}, model.Globals{}, base+int64(i))
 	}
+	// tick 0 writes the seed (0,0); ticks 1..10 each move the counter → 11 "" rows.
 	if got := rawCount(t, s, ""); got != 11 {
 		t.Fatalf("raw global rows = %d, want 11", got)
 	}
 
 	// Dedup: an unchanged counter must NOT add a row.
-	s.Sample(nil, model.Globals{DownTotal: 10 << 20, UpTotal: 10 * (512 << 10)}, base+11)
+	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 10 << 20, UpTotal: 10 * (512 << 10)}}, model.Globals{}, base+11)
 	if got := rawCount(t, s, ""); got != 11 {
 		t.Fatalf("after unchanged sample, raw rows = %d, want 11 (dedup)", got)
 	}
 
-	// Derived rate should be ~1 MiB/s down, ~512 KiB/s up.
-	pts, err := s.Query(context.Background(), 900, "")
+	// Derived rate at an active grid slot should be exactly 1 MiB/s down, 512 KiB/s up.
+	// A short range keeps the raw grid under the decimation target (exact, no averaging).
+	ser, err := s.Query(context.Background(), 30, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pts) == 0 {
+	if len(ser.Points) == 0 {
 		t.Fatal("no derived points")
 	}
-	last := pts[len(pts)-1]
-	if last.Down != 1<<20 || last.Up != 512<<10 {
-		t.Fatalf("derived rate = %d/%d, want %d/%d", last.Down, last.Up, 1<<20, 512<<10)
+	var found bool
+	for _, p := range ser.Points {
+		if p.TS == base+5 {
+			found = true
+			if p.Down != 1<<20 || p.Up != 512<<10 {
+				t.Fatalf("derived rate @%d = %d/%d, want %d/%d", p.TS, p.Down, p.Up, 1<<20, 512<<10)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no grid slot at base+5 (Start=%d End=%d Step=%d)", ser.Start, ser.End, ser.Step)
 	}
 
-	// Counter reset must clamp to 0 (no negative spike).
-	s.Sample(nil, model.Globals{DownTotal: 0, UpTotal: 0}, base+12)
-	pts, _ = s.Query(context.Background(), 900, "")
-	for _, p := range pts {
+	// Counter reset must clamp to 0 (no negative spike): AAA's payload drops to 0,
+	// so the per-torrent delta clamps and the global accumulator stays put.
+	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 0, UpTotal: 0}}, model.Globals{}, base+12)
+	ser, _ = s.Query(context.Background(), 30, "")
+	for _, p := range ser.Points {
 		if p.Down < 0 || p.Up < 0 {
 			t.Fatalf("negative rate after reset: %+v", p)
 		}
@@ -109,20 +122,73 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 		t.Fatal("1m tier empty after rollup")
 	}
 
-	// Per-torrent + GC: add a torrent (ts >= 60s after last `seen` refresh so it's
-	// recorded), then let it disappear and age past seenGrace (but not past the
-	// raw age-prune window, so we isolate GC from prune).
-	s.Sample([]model.Torrent{{Hash: "AAA", Completed: 5 << 20, UpTotal: 1 << 20}}, model.Globals{}, base+100)
-	if rawCount(t, s, "AAA") == 0 {
+	// Per-torrent + GC: add a fresh torrent, then let it disappear and age past
+	// seenGrace (but within the raw age-prune window, so we isolate GC from prune).
+	s.now = func() int64 { return base + 100 }
+	s.Sample([]model.Torrent{{Hash: "BBB", Completed: 5 << 20, UpTotal: 1 << 20}}, model.Globals{}, base+100)
+	if rawCount(t, s, "BBB") == 0 {
 		t.Fatal("per-torrent row not written")
 	}
 	s.now = func() int64 { return base + 500 } // past seenGrace(300s), within raw retain(900s)
 	s.maintain()
-	if got := rawCount(t, s, "AAA"); got != 0 {
-		t.Fatalf("removed torrent AAA still has %d rows after GC", got)
+	if got := rawCount(t, s, "BBB"); got != 0 {
+		t.Fatalf("removed torrent BBB still has %d rows after GC", got)
 	}
 	if rawCount(t, s, "") == 0 {
 		t.Fatal("global rows must survive GC")
+	}
+}
+
+// Idle gaps must read as 0 across the whole gap and the resume rate must land at its
+// real time slot — the core of the windowed grid resample. Drives the global ""
+// series (payload counter) via one torrent: active for 2s, idle ~2min, then active.
+func TestIdleGapZeroFill(t *testing.T) {
+	s, err := New(t.TempDir() + "/gap.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	const base = 1_700_000_000
+	const MB = 1 << 20
+	s.now = func() int64 { return base + 121 }
+
+	// Active 0..2 (cumulative 0,1,2 MB), idle 3..119 (no samples), resume 120..121.
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 0}}, model.Globals{}, base+0)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 1 * MB}}, model.Globals{}, base+1)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 2 * MB}}, model.Globals{}, base+2)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 3 * MB}}, model.Globals{}, base+120)
+	s.Sample([]model.Torrent{{Hash: "X", Completed: 4 * MB}}, model.Globals{}, base+121)
+
+	// range 130s → raw tier, step 1, grid [base-9, base+121] = 131 slots (< target, no decimation).
+	ser, err := s.Query(context.Background(), 130, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ser.Step != 1 || ser.End != base+121 || ser.Start != base+121-130 {
+		t.Fatalf("window wrong: Start=%d End=%d Step=%d", ser.Start, ser.End, ser.Step)
+	}
+	at := func(ts int64) (Point, bool) {
+		for _, p := range ser.Points {
+			if p.TS == ts {
+				return p, true
+			}
+		}
+		return Point{}, false
+	}
+	// active slots carry the real rate
+	for _, ts := range []int64{base + 1, base + 2, base + 120, base + 121} {
+		p, ok := at(ts)
+		if !ok || p.Down != 1*MB {
+			t.Fatalf("active slot @%d = %+v ok=%v, want Down=%d", ts, p, ok, 1*MB)
+		}
+	}
+	// every slot inside the idle gap reads exactly 0 (this is the fix)
+	for ts := int64(base + 3); ts <= base+119; ts++ {
+		p, ok := at(ts)
+		if !ok || p.Down != 0 || p.Up != 0 {
+			t.Fatalf("idle slot @%d = %+v ok=%v, want 0/0", ts, p, ok)
+		}
 	}
 }
 

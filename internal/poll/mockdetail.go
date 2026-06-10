@@ -102,6 +102,7 @@ func (m *MockDetail) Peers(_ context.Context, hash string) ([]model.Peer, error)
 			Client:    clients[(i+j)%len(clients)],
 			DownRate:  int64((j*131)%4000) << 10,
 			UpRate:    int64((j*57)%800) << 10,
+			DownTotal: int64((j*97+i*7)%900+1) << 20,
 			Progress:  int64((i*j + 13) % 101),
 			Encrypted: (i+j)%2 == 0,
 			Incoming:  j%2 == 0,

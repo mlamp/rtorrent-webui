@@ -108,6 +108,28 @@ export function matches(t: TorrentRow, v: ViewState): boolean {
   return true
 }
 
+/**
+ * Like matches(), but ignoring ONE facet — the lever for cross-filtered sidebar
+ * counts. To show how many of the *other* facets' matches fall into each value of
+ * a facet, count over the set matching every filter EXCEPT that facet (search is
+ * the shared base text filter and always applies). Allocation-free (inlines the
+ * checks rather than spreading the $state instance, which wouldn't enumerate).
+ */
+export function matchesExcept(t: TorrentRow, v: ViewState, except: 'status' | 'label' | 'tracker'): boolean {
+  if (except !== 'status') {
+    if (v.status === 'active') {
+      if (!isActive(t)) return false
+    } else if (!statusMatch[v.status](t.status)) return false
+  }
+  if (except !== 'label' && v.label !== null && t.label !== v.label) return false
+  if (except !== 'tracker' && v.tracker !== null && trackerHost(t.tracker) !== v.tracker) return false
+  if (v.search) {
+    const q = v.search.toLowerCase()
+    if (!t.name.toLowerCase().includes(q) && !t.hash.toLowerCase().includes(q)) return false
+  }
+  return true
+}
+
 export function compare(a: TorrentRow, b: TorrentRow, key: ColumnKey, dir: 1 | -1): number {
   let r = 0
   switch (key) {

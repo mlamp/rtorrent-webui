@@ -33,6 +33,17 @@ type Point struct {
 	Up   int64 `json:"up"`
 }
 
+// Series is a windowed rate result: a uniform time grid [Start, End] at Step-second
+// resolution. The back end dictates Step (the chosen tier's bucket) and zero-fills
+// idle slots, so every consumer draws a complete, time-correct series with no
+// client-side gap logic.
+type Series struct {
+	Start  int64   `json:"start"`
+	End    int64   `json:"end"`
+	Step   int64   `json:"step"`
+	Points []Point `json:"points"`
+}
+
 // GaugePoint is one stored gauge value at a timestamp (no derivation).
 type GaugePoint struct {
 	TS int64 `json:"t"`
@@ -79,7 +90,7 @@ type Store struct {
 
 // schemaVersion is the version this build expects; New() applies every
 // migration up to it. Bump it and append a migration when the schema changes.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // migration mutates the schema from version-1 to its version, inside a tx.
 type migration struct {
@@ -146,6 +157,18 @@ var migrations = []migration{
 				value  INTEGER NOT NULL,
 				PRIMARY KEY (res, metric, ts)
 			) WITHOUT ROWID;`)
+		return err
+	}},
+	{4, "global series → payload running counter", func(tx *sql.Tx) error {
+		// The global ('') series used to store throttle.global_*.total (cumulative,
+		// but INCLUDING BitTorrent protocol overhead), so its derived rate read higher
+		// than the payload-only per-torrent sum and showed phantom "download" while
+		// pure-seeding. It now stores a payload running counter (Σ per-torrent deltas).
+		// The two are not comparable, so deriving a rate across the switchover boundary
+		// would emit a bogus spike. Drop the stale '' rows from the short tiers we still
+		// query at fine resolution; the coarse 1h/1d tiers age out within a week and the
+		// seam there is invisible. Per-torrent ('AAA'…) rows are untouched.
+		_, err := tx.Exec(`DELETE FROM samples WHERE hash='' AND res IN ('raw','1m')`)
 		return err
 	}},
 }
@@ -263,6 +286,14 @@ func New(path string) (*Store, error) {
 		log.Printf("history: schema migrated v%d -> v%d", from, to)
 	}
 	s := &Store{db: db, last: map[string][2]int64{}, now: func() int64 { return time.Now().Unix() }}
+	// Seed the global payload accumulator from the last stored "" raw sample so the
+	// running counter continues across restarts. The absolute baseline is immaterial
+	// (rates derive from deltas); we just need a non-zero starting point so the first
+	// post-restart tick produces a sane delta rather than a spike from 0.
+	var gd, gu int64
+	if err := db.QueryRow(`SELECT down, up FROM samples WHERE res='raw' AND hash='' ORDER BY ts DESC LIMIT 1`).Scan(&gd, &gu); err == nil {
+		s.last[""] = [2]int64{gd, gu}
+	}
 	go s.maintainLoop()
 	return s, nil
 }
@@ -300,7 +331,29 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 		}
 	}
 
-	write("", g.DownTotal, g.UpTotal)
+	// Global "" series = a PAYLOAD running counter, matching the live "sum of all
+	// torrents" rate (g.DownTotal/UpTotal are throttle totals that also count protocol
+	// overhead, so they're intentionally NOT used here). Sum each torrent's positive
+	// payload delta since its last sample and add to the previous global total. This
+	// MUST run before the per-torrent writes below mutate s.last. A newly-seen torrent
+	// (absent from s.last) contributes 0 this tick, so adding a half-done torrent does
+	// not spike the global graph; per-torrent resets clamp to 0 so the global counter
+	// only moves forward. The "" row stays cumulative, so dedup + rollup + derive all
+	// keep working.
+	var dDown, dUp int64
+	for _, t := range torrents {
+		if prev, ok := s.last[t.Hash]; ok {
+			if d := t.Completed - prev[0]; d > 0 {
+				dDown += d
+			}
+			if u := t.UpTotal - prev[1]; u > 0 {
+				dUp += u
+			}
+		}
+	}
+	gp := s.last[""]
+	write("", gp[0]+dDown, gp[1]+dUp)
+
 	for _, t := range torrents {
 		write(t.Hash, t.Completed, t.UpTotal)
 	}
@@ -430,81 +483,103 @@ func pickTier(rangeSecs int64) (int, int) {
 	}
 }
 
-// Query returns a derived rate series (bytes/sec) for the range, decimated to
-// ~target points. hash "" = global. Rates come from cumulative deltas, so gaps
-// are averaged and counter resets are clamped to 0. If the resolution-appropriate
-// tier has < 2 points (nothing rolled up yet), it falls back to finer tiers so
-// the chart still shows the data we do have.
-func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) ([]Point, error) {
+// Query returns a windowed, zero-filled rate series for the range. The back end
+// dictates the grid Step (the chosen tier's bucket) and resamples the cumulative
+// counters onto it with carry-forward, so an idle slot reads exactly 0 and the
+// series is time-uniform across [Start, End]. hash "" = the global payload series.
+// Counter resets clamp to 0. The coarse→fine tier fallback keeps the chart
+// populated right after startup (before a coarse tier has rolled up).
+func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) (Series, error) {
 	if rangeSecs <= 0 {
 		rangeSecs = 3600
 	}
 	idx, target := pickTier(rangeSecs)
-	from := s.now() - rangeSecs
-
-	var best []Point
-	for i := idx; i >= 0; i-- {
-		pts, err := s.queryTier(ctx, tierOrder[i], from, hash)
-		if err != nil {
-			return nil, err
-		}
-		if len(pts) >= 2 {
-			best = pts
-			break
-		}
-		if len(pts) > len(best) {
-			best = pts // best-effort if every tier is sparse
+	now := s.now()
+	start, end := now-rangeSecs, now
+	// Never draw a grid that predates the torrent's first-seen sample — leading
+	// zeros for time before we knew it would be misleading. The global "" series
+	// has no first_seen and is left alone.
+	if hash != "" {
+		if fs, _ := s.FirstTS(ctx, hash); fs > 0 && fs > start {
+			start = fs
 		}
 	}
-	return decimate(best, target), nil
+
+	for i := idx; i >= 0; i-- {
+		step := tiers[i].bucket
+		samples, err := s.fetchSamples(ctx, tierOrder[i], hash, start, step)
+		if err != nil {
+			return Series{}, err
+		}
+		// Use this tier once it actually holds data, else fall to a finer one. The
+		// finest tier (i==0) is the floor: resample whatever it has — possibly an
+		// all-zero grid, the honest answer for a brand-new or idle series.
+		if len(samples) >= 2 || i == 0 {
+			pts := resampleGrid(samples, start, end, step)
+			return Series{Start: start, End: end, Step: step, Points: decimate(pts, target)}, nil
+		}
+	}
+	return Series{Start: start, End: end, Step: tiers[0].bucket}, nil // unreachable
 }
 
-// queryTier derives the rate series for one resolution tier.
-func (s *Store) queryTier(ctx context.Context, res string, from int64, hash string) ([]Point, error) {
-	// Fetch one sample before the window too, so the first in-range point has a
-	// predecessor to derive a rate from.
+// fetchSamples returns the stored cumulative samples for (res,hash) covering
+// [start, end], plus the last sample at or before start-step so the first grid
+// slot has a predecessor to derive a delta from. Ascending by ts.
+func (s *Store) fetchSamples(ctx context.Context, res, hash string, start, step int64) ([]Point, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT ts, down, up FROM samples
-		WHERE res=? AND hash=? AND ts >= (SELECT COALESCE(MAX(ts), 0) FROM samples WHERE res=? AND hash=? AND ts < ?)
-		ORDER BY ts`, res, hash, res, hash, from)
+		WHERE res=? AND hash=? AND ts >= (SELECT COALESCE(MAX(ts), 0) FROM samples WHERE res=? AND hash=? AND ts <= ?)
+		ORDER BY ts`, res, hash, res, hash, start-step)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-
-	type raw struct{ ts, down, up int64 }
-	var src []raw
+	var out []Point
 	for rows.Next() {
-		var r raw
-		if err := rows.Scan(&r.ts, &r.down, &r.up); err != nil {
+		var p Point
+		if err := rows.Scan(&p.TS, &p.Down, &p.Up); err != nil {
 			return nil, err
 		}
-		src = append(src, r)
+		out = append(out, p)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
+	return out, rows.Err()
+}
 
-	pts := make([]Point, 0, len(src))
-	for i := 1; i < len(src); i++ {
-		dt := src[i].ts - src[i-1].ts
-		if dt <= 0 {
-			continue
+// resampleGrid turns cumulative samples into a uniform rate grid over [start, end]
+// at `step` seconds: for each slot g, rate = max(0, C(g)-C(g-step))/step where C(g)
+// is the last cumulative value at or before g (carry-forward). An idle slot (C
+// unchanged) reads 0; a counter reset clamps to 0. samples must be ascending by ts.
+func resampleGrid(samples []Point, start, end, step int64) []Point {
+	if step <= 0 || end < start {
+		return nil
+	}
+	// Monotonic cursor: cumAt(x) returns the last cumulative value with ts <= x,
+	// carrying forward. Called with non-decreasing x (start-step, start, start+step…).
+	j := 0
+	cumAt := func(x int64) (int64, int64) {
+		for j < len(samples) && samples[j].TS <= x {
+			j++
 		}
-		dd := src[i].down - src[i-1].down
-		du := src[i].up - src[i-1].up
+		if j == 0 {
+			return 0, 0 // before the first sample — nothing transferred yet
+		}
+		return samples[j-1].Down, samples[j-1].Up
+	}
+	out := make([]Point, 0, (end-start)/step+1)
+	prevDown, prevUp := cumAt(start - step)
+	for g := start; g <= end; g += step {
+		cd, cu := cumAt(g)
+		dd, du := cd-prevDown, cu-prevUp
 		if dd < 0 {
-			dd = 0 // counter reset (rtorrent restart / re-add)
+			dd = 0
 		}
 		if du < 0 {
 			du = 0
 		}
-		if src[i].ts < from {
-			continue
-		}
-		pts = append(pts, Point{TS: src[i].ts, Down: dd / dt, Up: du / dt})
+		out = append(out, Point{TS: g, Down: dd / step, Up: du / step})
+		prevDown, prevUp = cd, cu
 	}
-	return pts, nil
+	return out
 }
 
 func decimate(pts []Point, target int) []Point {

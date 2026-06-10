@@ -21,8 +21,9 @@ type Peer struct {
 	Progress  int64  `json:"progress"` // 0..100
 	Encrypted bool   `json:"encrypted"`
 	Incoming  bool   `json:"incoming"`
-	Snubbed   bool   `json:"snubbed"` // real rtorrent protocol state (p.is_snubbed)
-	Country   string `json:"country"` // ISO-3166 alpha-2, filled by GeoIP (M5)
+	Snubbed   bool   `json:"snubbed"`   // real rtorrent protocol state (p.is_snubbed)
+	DownTotal int64  `json:"downTotal"` // cumulative bytes downloaded FROM this peer (p.down_total)
+	Country   string `json:"country"`   // ISO-3166 alpha-2, filled by GeoIP (M5)
 }
 
 // Pieces is the on-demand per-piece completion of a torrent. Bitfield is

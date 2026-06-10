@@ -4,12 +4,12 @@
   import { Toaster } from 'svelte-sonner'
   import { torrents } from '$lib/stores/torrents.svelte'
   import { globals } from '$lib/stores/globals.svelte'
-  import { view, matches, compare, type StatusFilter } from '$lib/stores/view.svelte'
+  import { view, matches, matchesExcept, isActive, compare, type StatusFilter } from '$lib/stores/view.svelte'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
   import { config } from '$lib/stores/config.svelte'
   import { connectSSE } from '$lib/api/sse'
-  import { api, bulk } from '$lib/api/client'
+  import { api, bulk, silentGet } from '$lib/api/client'
   import { short, trackerHost } from '$lib/format'
   import SpeedGraph from './components/SpeedGraph.svelte'
   import TorrentTable from './components/table/TorrentTable.svelte'
@@ -36,6 +36,18 @@
   }
 
   let rtVersion = $state('')
+
+  // Sidebar speed sparkline: fed the global /api/history series (same source +
+  // time-based logic as the insight/detail charts), seeded on load so it's never
+  // empty, refreshed on a slow cadence. The live ↓/↑ numbers stay on the SSE feed
+  // (globals); the graph is 15m of context, so a ≤20s lag is invisible.
+  type HistPoint = { t: number; down: number; up: number }
+  let sidebarHist = $state<{ points: HistPoint[]; start: number; end: number }>({ points: [], start: 0, end: 0 })
+  async function loadSidebarHist() {
+    const d = await silentGet<{ points: HistPoint[]; start: number; end: number }>('/api/history?range=15m')
+    if (d) sidebarHist = { points: d.points ?? [], start: d.start ?? 0, end: d.end ?? 0 }
+  }
+
   onMount(() => {
     const close = connectSSE()
     // Instance name first (fast, rtorrent-independent) so the brand/title never
@@ -48,7 +60,12 @@
       .then((r) => r.json())
       .then((j) => (rtVersion = j?.data?.rtorrent ? `rtorrent ${j.data.rtorrent} · api ${j.data.api}` : ''))
       .catch(() => {})
-    return close
+    loadSidebarHist()
+    const histTimer = setInterval(loadSidebarHist, 20000)
+    return () => {
+      close()
+      clearInterval(histTimer)
+    }
   })
 
   // Live up/down speed in the browser tab title (Flood-style). A configured
@@ -76,10 +93,19 @@
     return arr
   })
 
+  // ── faceted sidebar counts ───────────────────────────────────────────────
+  // Each facet's counts are computed over the set matching every OTHER active
+  // filter (status excludes status, etc.), so filtering by tracker narrows the
+  // status counts and vice-versa. Option lists still come from the full set so a
+  // value never disappears (count just goes to 0).
+  const statusBase = $derived(all.filter((t) => matchesExcept(t, view, 'status')))
+  const labelBase = $derived(all.filter((t) => matchesExcept(t, view, 'label')))
+  const trackerBase = $derived(all.filter((t) => matchesExcept(t, view, 'tracker')))
+
   const counts = $derived.by(() => {
-    const c = { all: all.length, active: 0, downloading: 0, seeding: 0, stopped: 0, error: 0 }
-    for (const t of all) {
-      if (t.downRate > 0 || t.upRate > 0) c.active++
+    const c = { all: statusBase.length, active: 0, downloading: 0, seeding: 0, stopped: 0, error: 0 }
+    for (const t of statusBase) {
+      if (isActive(t)) c.active++
       if (t.status === 'downloading') c.downloading++
       else if (t.status === 'seeding') c.seeding++
       else if (t.status === 'stopped' || t.status === 'paused') c.stopped++
@@ -89,18 +115,20 @@
   })
 
   const labels = $derived.by(() => {
+    const present = [...new Set(all.map((t) => t.label).filter(Boolean))].sort((a, b) => a.localeCompare(b))
     const m = new Map<string, number>()
-    for (const t of all) if (t.label) m.set(t.label, (m.get(t.label) ?? 0) + 1)
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    for (const t of labelBase) if (t.label) m.set(t.label, (m.get(t.label) ?? 0) + 1)
+    return present.map((name) => [name, m.get(name) ?? 0] as [string, number])
   })
 
   const trackers = $derived.by(() => {
+    const present = [...new Set(all.map((t) => trackerHost(t.tracker)).filter(Boolean))].sort((a, b) => a.localeCompare(b))
     const m = new Map<string, number>()
-    for (const t of all) {
+    for (const t of trackerBase) {
       const h = trackerHost(t.tracker)
       if (h) m.set(h, (m.get(h) ?? 0) + 1)
     }
-    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+    return present.map((host) => [host, m.get(host) ?? 0] as [string, number])
   })
 
   const statusFilters: { key: StatusFilter; label: string; mark: string; count: () => number }[] = [
@@ -235,8 +263,11 @@
   <div class="flex min-h-0 flex-1">
     <!-- ───────── sidebar (full-height left rail; list only) ───────── -->
     {#if view.mode !== 'insight'}
-      <aside class="hidden w-[300px] shrink-0 flex-col gap-5 overflow-y-auto border-r border-line px-4 py-[18px] md:flex">
-        <Brand class="mb-1.5" />
+      <aside class="hidden w-[300px] shrink-0 flex-col gap-5 overflow-y-auto border-r border-line px-4 pb-[18px] md:flex">
+        <!-- brand sits in a 54px-tall slot matching the header height, so it doesn't
+             shift vertically when switching list ↔ insight (where it lives in the
+             header). -mx-4 lets the divider span the full sidebar width. -->
+        <div class="-mx-4 flex h-[54px] shrink-0 items-center border-b border-line px-4"><Brand /></div>
 
         <div class="cap-box px-[13px] pb-[11px] pt-[13px]">
           <div class="cap">transfer</div>
@@ -250,7 +281,7 @@
               <span class="glow-acc2 text-[18px] font-semibold tracking-[-0.01em]">{short(globals.upRate)}<small>B/s</small></span>
             </div>
           </div>
-          <div class="mt-[11px]"><SpeedGraph dl={globals.dlHist} ul={globals.ulHist} /></div>
+          <div class="mt-[11px]"><SpeedGraph points={sidebarHist.points} start={sidebarHist.start} end={sidebarHist.end} /></div>
           <div class="mt-2 text-[10.5px] tracking-[0.04em] text-dim">Σ ↓{short(globals.downTotal)} &nbsp; ↑{short(globals.upTotal)}</div>
         </div>
 
@@ -267,7 +298,7 @@
           <div class="flex flex-col gap-px">
             <div class="mb-[7px] text-[10px] uppercase tracking-[0.16em] text-dim">// labels</div>
             <div class="frow" class:on={view.label === null} onclick={() => (view.label = null)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && (view.label = null)}>
-              <span class="mk">·</span>all<span class="ct">{all.length}</span>
+              <span class="mk">·</span>all<span class="ct">{labelBase.length}</span>
             </div>
             {#each labels as [name, count] (name)}
               <div class="frow" class:on={view.label === name} onclick={() => (view.label = name)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && (view.label = name)}>
@@ -281,7 +312,7 @@
           <div class="flex flex-col gap-px">
             <div class="mb-[7px] text-[10px] uppercase tracking-[0.16em] text-dim">// tracker</div>
             <div class="frow" class:on={view.tracker === null} onclick={() => (view.tracker = null)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && (view.tracker = null)}>
-              <span class="mk">·</span>all<span class="ct">{all.length}</span>
+              <span class="mk">·</span>all<span class="ct">{trackerBase.length}</span>
             </div>
             {#each trackers as [host, count] (host)}
               <div class="frow" class:on={view.tracker === host} onclick={() => (view.tracker = host)} role="button" tabindex="0" onkeydown={(e) => e.key === 'Enter' && (view.tracker = host)}>
@@ -375,7 +406,7 @@
 </div>
 
 {#if hintVisible}
-  <div class="kbd-hint"><span class="kbd">?</span> shortcuts</div>
+  <button class="kbd-hint" type="button" title="keyboard shortcuts" aria-label="keyboard shortcuts" onclick={() => (helpOpen = true)}><span class="kbd">?</span></button>
 {/if}
 
 <Toaster theme="dark" position="bottom-right" />

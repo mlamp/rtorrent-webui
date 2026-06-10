@@ -18,17 +18,17 @@ func rawRow(vals ...any) []json.RawMessage {
 }
 
 func TestPeerFieldsAlignment(t *testing.T) {
-	if len(peerFields) != 9 {
-		t.Fatalf("peerFields has %d entries; decodePeers reads r[0..8] — keep them in lockstep", len(peerFields))
+	if len(peerFields) != 10 {
+		t.Fatalf("peerFields has %d entries; decodePeers reads r[0..9] — keep them in lockstep", len(peerFields))
 	}
 }
 
 func TestDecodePeers(t *testing.T) {
-	// is_encrypted=1(int), is_incoming=0(int), is_snubbed="1"(numeric string)
+	// is_encrypted=1(int), is_incoming=0(int), is_snubbed="1"(numeric string), down_total trailing
 	rows := [][]json.RawMessage{
-		rawRow("1.2.3.4", 6881, "qBittorrent 4.6", 1024, 512, 73, 1, 0, "1"),
-		rawRow("5.6.7.8", "51413", "Deluge", "0", "0", "0", 0, 1, 0),
-		rawRow("short", 1, "x"), // < 9 cols → dropped
+		rawRow("1.2.3.4", 6881, "qBittorrent 4.6", 1024, 512, 73, 1, 0, "1", 4096),
+		rawRow("5.6.7.8", "51413", "Deluge", "0", "0", "0", 0, 1, 0, "8192"),
+		rawRow("short", 1, "x"), // < 10 cols → dropped
 	}
 	got := decodePeers(rows)
 	if len(got) != 2 {
@@ -42,11 +42,11 @@ func TestDecodePeers(t *testing.T) {
 	if p.Incoming == p.Snubbed {
 		t.Fatal("Incoming and Snubbed decoded identically — r[7]/r[8] likely swapped")
 	}
-	if p.Port != 6881 || p.DownRate != 1024 || p.Progress != 73 {
+	if p.Port != 6881 || p.DownRate != 1024 || p.Progress != 73 || p.DownTotal != 4096 {
 		t.Fatalf("numeric fields wrong: %+v", p)
 	}
-	if got[1].Port != 51413 { // numeric string coerced
-		t.Fatalf("string port not coerced: %d", got[1].Port)
+	if got[1].Port != 51413 || got[1].DownTotal != 8192 { // numeric strings coerced
+		t.Fatalf("string fields not coerced: port=%d downTotal=%d", got[1].Port, got[1].DownTotal)
 	}
 }
 

@@ -18,6 +18,7 @@ export interface PeerInfo {
   encrypted: boolean
   incoming: boolean
   snubbed: boolean // real rtorrent protocol state (p.is_snubbed)
+  downTotal: number // cumulative bytes downloaded FROM this peer (p.down_total)
   country: string // ISO alpha-2 ("" if unknown)
 }
 

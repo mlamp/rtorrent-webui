@@ -35,7 +35,7 @@ func multicallRows(c *Client, ctx context.Context, method, hash string, fields .
 // pin the alignment).
 var (
 	fileFields    = []string{"f.path=", "f.size_bytes=", "f.completed_chunks=", "f.size_chunks=", "f.priority="}
-	peerFields    = []string{"p.address=", "p.port=", "p.client_version=", "p.down_rate=", "p.up_rate=", "p.completed_percent=", "p.is_encrypted=", "p.is_incoming=", "p.is_snubbed="}
+	peerFields    = []string{"p.address=", "p.port=", "p.client_version=", "p.down_rate=", "p.up_rate=", "p.completed_percent=", "p.is_encrypted=", "p.is_incoming=", "p.is_snubbed=", "p.down_total="}
 	trackerFields = []string{"t.url=", "t.is_enabled=", "t.type=", "t.latest_event=", "t.success_counter=", "t.failed_counter=", "t.failed_time_last=", "t.success_time_last="}
 )
 
@@ -93,6 +93,7 @@ func decodePeers(rows [][]json.RawMessage) []model.Peer {
 			Encrypted: asIntRaw(r[6]) != 0,
 			Incoming:  asIntRaw(r[7]) != 0,
 			Snubbed:   asIntRaw(r[8]) != 0,
+			DownTotal: asIntRaw(r[9]),
 		})
 	}
 	return out
