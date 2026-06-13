@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
   import TrafficChart from '../charts/TrafficChart.svelte'
   import MetricChart from '../charts/MetricChart.svelte'
   import { globals } from '$lib/stores/globals.svelte'
   import { silentGet } from '$lib/api/client'
   import { latestOnly } from '$lib/latest'
+  import { pollWhileVisible } from '$lib/poll.svelte'
   import { short } from '$lib/format'
 
   type Point = { t: number; down: number; up: number }
@@ -40,17 +40,13 @@
     loadHistory()
     loadMetrics()
   }
-  onMount(() => {
+  // Immediate load + 3s cadence while the tab is visible; paused when hidden,
+  // refreshed instantly on return.
+  pollWhileVisible(() => {
     loadHistory()
     loadMetrics()
     loadDisk()
-    const id = setInterval(() => {
-      loadHistory()
-      loadMetrics()
-      loadDisk()
-    }, 3000)
-    return () => clearInterval(id)
-  })
+  }, 3000)
 
   const usedPct = (d: { total: number; used: number }) => (d.total > 0 ? (d.used / d.total) * 100 : 0)
 

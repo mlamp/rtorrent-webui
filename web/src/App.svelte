@@ -5,6 +5,8 @@
   import { torrents } from '$lib/stores/torrents.svelte'
   import { globals } from '$lib/stores/globals.svelte'
   import { view, matches, matchesExcept, isActive, compare, type StatusFilter } from '$lib/stores/view.svelte'
+  import { lifecycle } from '$lib/stores/lifecycle.svelte'
+  import type { Connection } from '$lib/stores/globals.svelte'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
   import { config } from '$lib/stores/config.svelte'
@@ -43,6 +45,7 @@
   const speedEnd = $derived(globals.speed.at(-1)?.t ?? 0)
 
   onMount(() => {
+    const stopLifecycle = lifecycle.init() // before connectSSE: the driver subscribes to its signals
     const close = connectSSE()
     // Instance name first (fast, rtorrent-independent) so the brand/title never
     // wait on — or get stuck behind — a slow/unreachable daemon.
@@ -54,7 +57,10 @@
       .then((r) => r.json())
       .then((j) => (rtVersion = j?.data?.rtorrent ? `rtorrent ${j.data.rtorrent} · api ${j.data.api}` : ''))
       .catch(() => {})
-    return close
+    return () => {
+      close()
+      stopLifecycle()
+    }
   })
 
   // Live up/down speed in the browser tab title (Flood-style). A configured
@@ -68,11 +74,17 @@
     const parts: string[] = []
     if (d > 0) parts.push(`↓ ${short(d)}B/s`)
     if (u > 0) parts.push(`↑ ${short(u)}B/s`)
-    if (live && parts.length) {
-      document.title = name ? `${parts.join(' ')} · ${name}` : `${parts.join(' ')} · TorUI`
-    } else {
-      document.title = name ? `${name} · TorUI` : 'TorUI · rtorrent'
-    }
+    const next =
+      live && parts.length
+        ? name
+          ? `${parts.join(' ')} · ${name}`
+          : `${parts.join(' ')} · TorUI`
+        : name
+          ? `${name} · TorUI`
+          : 'TorUI · rtorrent'
+    // dedup: don't touch the DOM title when nothing changed (belt-and-braces
+    // against any future event storm re-running this effect per message)
+    if (document.title !== next) document.title = next
   })
 
   const all = $derived([...torrents.map.values()])
@@ -129,10 +141,17 @@
     { key: 'error', label: 'ERROR', mark: '!', count: () => counts.error },
   ]
 
+  // Record (not a ternary chain) so adding a Connection member is a compile
+  // error here instead of a silent fall-through to error-red.
+  const DOT: Record<Connection, string> = {
+    live: 'bg-status-seed',
+    connecting: 'bg-status-check',
+    reconnecting: 'bg-status-check',
+    idle: 'bg-dim',
+    offline: 'bg-status-error',
+  }
   const conn = $derived(globals.connection)
-  const connDot = $derived(
-    conn === 'live' ? 'bg-status-seed' : conn === 'reconnecting' ? 'bg-status-check' : 'bg-status-error',
-  )
+  const connDot = $derived(DOT[conn])
 
   // ── global keyboard ─────────────────────────────────────────────────────────
   function selectAllVisible() {

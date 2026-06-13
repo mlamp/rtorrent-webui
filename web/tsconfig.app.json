@@ -5,6 +5,7 @@
     "target": "es2023",
     "module": "esnext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "types": ["svelte", "vite/client"],
     "noEmit": true,
     "allowJs": true,

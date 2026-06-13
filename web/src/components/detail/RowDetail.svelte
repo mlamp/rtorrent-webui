@@ -4,7 +4,7 @@
   import { api, silentGet } from '$lib/api/client'
   import { short, ratio, relativeTime } from '$lib/format'
   import { toast } from 'svelte-sonner'
-  import { onMount } from 'svelte'
+  import { pollWhileVisible } from '$lib/poll.svelte'
   import PieceMap from './PieceMap.svelte'
   import CountryFlag from './CountryFlag.svelte'
   import TrafficChart from '../charts/TrafficChart.svelte'
@@ -118,13 +118,13 @@
       if (last && last.key !== range) range = last.key
     }
   })
-  onMount(() => {
-    const id = setInterval(() => {
-      loadHistory()
-      detail.refreshActive() // keep whichever tab is open live (pieces/files/peers/trackers)
-    }, 3000)
-    return () => clearInterval(id)
-  })
+  // 3s refresh while the tab is visible; paused when hidden, refreshed instantly
+  // on return. The immediate call duplicates the range/hash $effect's initial
+  // fetch and races detail.open()'s load — both are guarded (reqSeq / busy flag).
+  pollWhileVisible(() => {
+    loadHistory()
+    detail.refreshActive() // keep whichever tab is open live (pieces/files/peers/trackers)
+  }, 3000)
 
   const tabs: { key: DetailTab; label: string }[] = [
     { key: 'general', label: 'PIECES' },

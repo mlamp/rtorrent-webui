@@ -1,6 +1,8 @@
 import type { GlobalsWire } from '$lib/types/torrent'
 
-export type Connection = 'connecting' | 'live' | 'reconnecting' | 'offline'
+// 'idle' = deliberately disconnected while the tab is hidden (not an error);
+// reconnects with a fresh server snapshot on the next show.
+export type Connection = 'connecting' | 'live' | 'reconnecting' | 'idle' | 'offline'
 
 // Sidebar sparkline window: keep the last ~2 minutes of live samples. Short and
 // per-tick so the sidebar graph stays snappy/reactive (the longer historical view

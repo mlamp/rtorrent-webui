@@ -1,57 +1,38 @@
 import { torrents } from '$lib/stores/torrents.svelte'
 import { globals } from '$lib/stores/globals.svelte'
-import type { SnapshotMsg, DeltaMsg } from '$lib/types/torrent'
+import { lifecycle } from '$lib/stores/lifecycle.svelte'
+import { createSseDriver } from '$lib/sse-driver'
 
 /**
- * Connect to the SSE stream and feed the stores. Native EventSource does not
- * reconnect on HTTP-error responses and offers no backoff, so we manage it:
- * close on error and reconnect with exponential backoff + jitter.
+ * Thin shell around the visibility-aware SSE driver: real EventSource, real
+ * timers/clock, and the rune-bearing stores live here; every lifecycle and
+ * staleness decision lives in $lib/sse-driver (pure, unit-tested in plain node
+ * — see test/sse-driver.test.ts for the invariants).
  */
 export function connectSSE(url = '/api/events'): () => void {
-  let es: EventSource | null = null
-  let backoff = 1000
-  let stopped = false
-  let timer: ReturnType<typeof setTimeout> | undefined
-
-  const open = () => {
-    es = new EventSource(url)
-
-    es.addEventListener('open', () => {
-      backoff = 1000
-      globals.connection = 'live'
-    })
-
-    es.addEventListener('snapshot', (e) => {
-      const d: SnapshotMsg = JSON.parse((e as MessageEvent).data)
+  const driver = createSseDriver(url, {
+    createES: (u) => new EventSource(u),
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
+    now: Date.now,
+    random: Math.random,
+    visible: () => lifecycle.visible,
+    onConnection: (c) => (globals.connection = c),
+    applySnapshot: (d) => {
       torrents.applySnapshot(d.torrents)
       globals.apply(d.globals)
-      globals.connection = 'live'
-    })
-
-    es.addEventListener('delta', (e) => {
-      const d: DeltaMsg = JSON.parse((e as MessageEvent).data)
+    },
+    applyDelta: (d) => {
       if (d.upserts?.length) torrents.applyUpserts(d.upserts)
       if (d.removed?.length) torrents.remove(d.removed)
       globals.apply(d.globals)
-      globals.connection = 'live'
-    })
-
-    es.addEventListener('error', () => {
-      es?.close()
-      if (stopped) return
-      globals.connection = 'reconnecting'
-      const wait = backoff * (0.8 + Math.random() * 0.4)
-      backoff = Math.min(backoff * 2, 30000)
-      timer = setTimeout(open, wait)
-    })
-  }
-
-  open()
-
+    },
+    warn: (m) => console.warn(m),
+  })
+  const unsub = lifecycle.subscribe((s) => driver.signal(s))
+  driver.start()
   return () => {
-    stopped = true
-    if (timer) clearTimeout(timer)
-    es?.close()
-    globals.connection = 'offline'
+    unsub()
+    driver.stop()
   }
 }
