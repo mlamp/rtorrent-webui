@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -64,28 +65,45 @@ var tiers = []tier{
 	{"1d", 86400, int64((365 * 24 * time.Hour).Seconds())},
 }
 
-// rollup chain: derive dst from src by keeping the last value per dst bucket.
-var rollups = []struct {
+// rollupSpec derives dst from src over a bounded recent window each pass.
+type rollupSpec struct {
 	src, dst string
 	bucket   int64
 	window   int64 // re-roll this many seconds back each pass (idempotent)
-}{
+}
+
+// rollup chain: derive dst from src by keeping the last value per dst bucket.
+// Keeping the LAST cumulative value is idempotent under any window, so these
+// windows only bound work.
+var rollups = []rollupSpec{
 	{"raw", "1m", 60, 30 * 60},
 	{"1m", "1h", 3600, 3 * 3600},
 	{"1h", "1d", 86400, 50 * 3600},
 }
 
-// gaugeRollups uses the same tiers/windows as `rollups`, but the gauge rollup in
-// maintain() AVERAGES per bucket (gauges are instantaneous, not cumulative).
-var gaugeRollups = rollups
+// gaugeRollups: the gauge rollup in maintain() AVERAGES per bucket (gauges are
+// instantaneous, not cumulative). An AVG re-roll is only idempotent while the
+// bucket's source rows ALL still exist, so each window + one bucket must stay
+// inside the source tier's retention — raw retention is 15m (900s), hence 600s
+// here, not 30m. (maintain additionally floors the cutoff to a bucket boundary
+// so a closed bucket is never re-rolled from a partial row set.)
+var gaugeRollups = []rollupSpec{
+	{"raw", "1m", 60, 600},
+	{"1m", "1h", 3600, 3 * 3600},
+	{"1h", "1d", 86400, 50 * 3600},
+}
 
 const seenGrace = 5 * 60 // purge a torrent's history this long after it disappears
 
 type Store struct {
 	db       *sql.DB
+	lastMu   sync.Mutex          // guards last (Sample vs maintain GC invalidation)
 	last     map[string][2]int64 // series hash -> last written {down,up} (raw dedup)
 	lastSeen int64               // unix secs of last `seen` refresh (throttled)
 	now      func() int64
+
+	stop     chan struct{} // closes to end maintainLoop
+	stopOnce sync.Once
 }
 
 // schemaVersion is the version this build expects; New() applies every
@@ -283,6 +301,7 @@ func New(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	for _, p := range []string{`PRAGMA journal_mode=WAL`, `PRAGMA synchronous=NORMAL`, `PRAGMA busy_timeout=5000`} {
 		if _, err := db.Exec(p); err != nil {
+			_ = db.Close()
 			return nil, err
 		}
 	}
@@ -294,7 +313,14 @@ func New(path string) (*Store, error) {
 	if from != to {
 		log.Printf("history: schema migrated v%d -> v%d", from, to)
 	}
-	s := &Store{db: db, last: map[string][2]int64{}, now: func() int64 { return time.Now().Unix() }}
+	// Write probe: fail loud now if the DB isn't writable (read-only file/mount).
+	// Sample/maintain swallow write errors by design, so an unwritable store would
+	// otherwise silently discard all history. Doubles as a useful marker.
+	if _, err := db.Exec(`INSERT OR REPLACE INTO meta(key,value) VALUES('opened_at', ?)`, time.Now().Unix()); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("history db not writable: %w", err)
+	}
+	s := &Store{db: db, last: map[string][2]int64{}, now: func() int64 { return time.Now().Unix() }, stop: make(chan struct{})}
 	go s.maintainLoop()
 	return s, nil
 }
@@ -306,14 +332,29 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 	if err != nil {
 		return
 	}
-	// Commit only on a clean run; roll back if we bail mid-way so a partial/empty
-	// transaction is never committed.
+	// In-memory state (the dedup cache and the refresh throttle) must mirror what
+	// is DURABLE, so advance it only after tx.Commit() returns nil. A commit-stage
+	// failure (the realistic ENOSPC mode in WAL) then leaves the cache untouched,
+	// and the next poll re-persists instead of dedup-skipping rows that never
+	// landed. pending holds this round's writes until commit confirms them.
 	ok := false
+	refreshed := false
+	pending := map[string][2]int64{}
 	defer func() {
-		if ok {
-			_ = tx.Commit()
-		} else {
+		if !ok {
 			_ = tx.Rollback()
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			return // not durable -> do not advance dedup cache / throttle
+		}
+		s.lastMu.Lock()
+		for h, v := range pending {
+			s.last[h] = v
+		}
+		s.lastMu.Unlock()
+		if refreshed {
+			s.lastSeen = ts
 		}
 	}()
 
@@ -328,7 +369,7 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 			return // unchanged -> skip
 		}
 		if _, err := ins.Exec(hash, ts, down, up); err == nil {
-			s.last[hash] = [2]int64{down, up}
+			pending[hash] = [2]int64{down, up}
 		}
 	}
 
@@ -342,12 +383,14 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 	// sidebar's "sum of all torrents". Add/remove-torrent jumps clamp at query time
 	// (resampleGrid). The -rebuild-history hatch reconstructs this same Σ for history.
 	var sumDown, sumUp int64
+	s.lastMu.Lock()
 	for _, t := range torrents {
 		sumDown += t.DownTotal
 		sumUp += t.UpTotal
 		write(t.Hash, t.DownTotal, t.UpTotal)
 	}
 	write("", sumDown, sumUp)
+	s.lastMu.Unlock()
 
 	// Record first sight *immediately* (unthrottled): first_seen must be the exact
 	// first-sample ts, since FirstTS uses it to gate the UI's time-range buttons.
@@ -363,14 +406,26 @@ func (s *Store) Sample(torrents []model.Torrent, g model.Globals, ts int64) {
 	// Advance last_seen (for GC of removed torrents) at most once a minute. The CASE
 	// also heals any first_seen left at 0 by the v2 backfill — adopting a current
 	// bound beats the bucket-floored MIN(ts) FirstTS would otherwise fall back to.
+	// The same round persists meta 'last_poll' — the GC anchor (see maintain).
+	// The throttle only advances when every write succeeded, so a failed round
+	// (ENOSPC and friends) is retried on the next tick instead of waiting 60s.
 	if ts-s.lastSeen >= 60 {
-		s.lastSeen = ts
+		refreshed = true
 		if upd, err := tx.Prepare(`UPDATE seen SET last_seen=?,
 			first_seen=CASE WHEN first_seen=0 THEN ? ELSE first_seen END WHERE hash=?`); err == nil {
 			for _, t := range torrents {
-				_, _ = upd.Exec(ts, ts, t.Hash)
+				if _, err := upd.Exec(ts, ts, t.Hash); err != nil {
+					refreshed = false
+				}
 			}
 			upd.Close()
+		} else {
+			refreshed = false
+		}
+		if refreshed {
+			if _, err := tx.Exec(`INSERT OR REPLACE INTO meta(key,value) VALUES('last_poll', ?)`, ts); err != nil {
+				refreshed = false
+			}
 		}
 	}
 	ok = true
@@ -516,8 +571,13 @@ func (s *Store) SampleGauges(m map[string]int64, ts int64) {
 func (s *Store) maintainLoop() {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
-	for range t.C {
-		s.maintain()
+	for {
+		select {
+		case <-t.C:
+			s.maintain()
+		case <-s.stop:
+			return
+		}
 	}
 }
 
@@ -545,24 +605,66 @@ func (s *Store) maintain() {
 	// Gauge rollups: AVERAGE value per dst bucket (gauges are instantaneous, so
 	// last-value-wins would throw away the bucket's shape). Stamp the bucket start,
 	// matching the `samples` convention so the chart X-axis logic stays consistent.
+	// The cutoff is floored to a bucket boundary: an unaligned cutoff would sweep
+	// THROUGH each closed bucket as now advances, recomputing its AVG over only the
+	// tail rows past the cutoff and freezing that corrupted value via REPLACE. A
+	// bucket therefore re-rolls with its complete row set or not at all.
 	for _, r := range gaugeRollups {
+		from := ((now - r.window) / r.bucket) * r.bucket
 		s.db.Exec(`
 			INSERT OR REPLACE INTO metrics(res,metric,ts,value)
 			SELECT ?, metric, (ts/?)*?, CAST(AVG(value) AS INTEGER)
 			FROM metrics WHERE res=? AND ts >= ?
 			GROUP BY metric, ts/?`,
-			r.dst, r.bucket, r.bucket, r.src, now-r.window, r.bucket)
+			r.dst, r.bucket, r.bucket, r.src, from, r.bucket)
 	}
 	for _, t := range tiers {
 		s.db.Exec(`DELETE FROM metrics WHERE res=? AND ts < ?`, t.res, now-t.retain)
 	}
-	// GC removed torrents (only once we actually know the current set).
-	var seenCount int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM seen`).Scan(&seenCount)
-	if seenCount > 0 {
-		cut := now - seenGrace
-		s.db.Exec(`DELETE FROM samples WHERE hash <> '' AND hash NOT IN (SELECT hash FROM seen WHERE last_seen >= ?)`, cut)
+	// GC removed torrents. The purge cut anchors to meta 'last_poll' — the ts of
+	// the last seen-refresh round that actually COMMITTED — never to wall clock:
+	// a stale last_seen means "removed from rtorrent" only relative to polls that
+	// persisted. Every present torrent's last_seen equals the same last_poll (the
+	// refresh updates them in one round), so live history can't be wiped by an
+	// outage, a write-failure era (ENOSPC), or the 60s refresh-throttle lag; a
+	// removed torrent is purged once refresh rounds flow seenGrace past its last
+	// sighting, including the everything-removed case (the round still runs).
+	var lastPoll int64
+	_ = s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM meta WHERE key='last_poll'`).Scan(&lastPoll)
+	// Clamp the anchor to the current clock: a backward clock step leaves a
+	// fresh-but-future last_poll behind, which would make every just-added
+	// torrent (seeded at the rewound time) look ancient and purge it. min()
+	// fails safe — at worst a removed torrent lingers until the clock catches up.
+	if lastPoll > now {
+		lastPoll = now
+	}
+	if lastPoll > 0 {
+		cut := lastPoll - seenGrace
+		// Purge only on positive evidence of staleness: a `seen` row older than
+		// the cut. A torrent with samples but no seen row (a transient un-seeded
+		// round) is NOT wiped — it re-seeds on the next poll. Removed torrents
+		// always have a seen row (seeded when present), so they still collect.
+		var stale []string
+		if rows, err := s.db.Query(`SELECT hash FROM seen WHERE last_seen < ?`, cut); err == nil {
+			for rows.Next() {
+				var h string
+				if rows.Scan(&h) == nil {
+					stale = append(stale, h)
+				}
+			}
+			rows.Close()
+		}
+		s.db.Exec(`DELETE FROM samples WHERE hash <> '' AND hash IN (SELECT hash FROM seen WHERE last_seen < ?)`, cut)
 		s.db.Exec(`DELETE FROM seen WHERE last_seen < ?`, cut)
+		// Drop purged hashes from the dedup cache: a re-added torrent with an
+		// unchanged counter must still get a fresh baseline row.
+		if len(stale) > 0 {
+			s.lastMu.Lock()
+			for _, h := range stale {
+				delete(s.last, h)
+			}
+			s.lastMu.Unlock()
+		}
 	}
 }
 
@@ -594,7 +696,7 @@ func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) (Series
 	if rangeSecs <= 0 {
 		rangeSecs = 3600
 	}
-	idx, target := pickTier(rangeSecs)
+	idx, _ := pickTier(rangeSecs) // target only bounds gauge series; the rate grid ships complete
 	// The grid step is dictated by the RANGE (the chosen tier's bucket), NOT by which
 	// tier we end up reading. This keeps the grid bounded (~range/step slots) even when
 	// we fall back to a finer tier — otherwise a 7d/1y request that falls back to raw
@@ -621,8 +723,10 @@ func (s *Store) Query(ctx context.Context, rangeSecs int64, hash string) (Series
 		// finest tier (i==0) is the floor: resample whatever it has — possibly an
 		// all-zero grid, the honest answer for a brand-new or idle series.
 		if len(samples) >= 2 || i == 0 {
-			pts := resampleGrid(samples, start, end, step)
-			return Series{Start: start, End: end, Step: step, Points: decimate(pts, target)}, nil
+			// The grid ships complete: decimating here would break the uniform
+			// [Start, End]/Step contract (ragged spacing, chunk-mean values) that
+			// every consumer relies on for zero-fill and slot alignment.
+			return Series{Start: start, End: end, Step: step, Points: resampleGrid(samples, start, end, step)}, nil
 		}
 	}
 	return Series{Start: start, End: end, Step: step}, nil // unreachable
@@ -708,32 +812,6 @@ func resampleGrid(samples []Point, start, end, step int64) []Point {
 	return out
 }
 
-func decimate(pts []Point, target int) []Point {
-	if target <= 0 || len(pts) <= target {
-		return pts
-	}
-	out := make([]Point, 0, target)
-	step := float64(len(pts)) / float64(target)
-	for i := 0; i < target; i++ {
-		lo := int(float64(i) * step)
-		hi := int(float64(i+1) * step)
-		if hi > len(pts) {
-			hi = len(pts)
-		}
-		if lo >= hi {
-			continue
-		}
-		var sd, su int64
-		for j := lo; j < hi; j++ {
-			sd += pts[j].Down
-			su += pts[j].Up
-		}
-		n := int64(hi - lo)
-		out = append(out, Point{TS: pts[hi-1].TS, Down: sd / n, Up: su / n})
-	}
-	return out
-}
-
 // FirstTS returns when we first observed a hash, so the UI can offer only the
 // time ranges that actually have data (e.g. hide "1y" on a day-old torrent), or
 // 0 if we hold nothing for it. hash "" = global.
@@ -747,10 +825,16 @@ func (s *Store) FirstTS(ctx context.Context, hash string) (int64, error) {
 	if err := s.db.QueryRowContext(ctx, `SELECT first_seen FROM seen WHERE hash=?`, hash).Scan(&fs); err == nil && fs.Valid && fs.Int64 > 0 {
 		return fs.Int64, nil
 	}
-	// Fallback restricted to the raw tier: its timestamps are exact (rollup tiers
-	// floor to the bucket start, so MIN across them could pre-date the first sample).
+	// Fallback across ALL tiers: long-retention history lives in 1m/1h/1d while
+	// raw holds only 15m, so a raw-only MIN would claim months of global history
+	// began minutes ago. Coarse tiers floor ts to the bucket start, so this can
+	// pre-date the true first sample by up to one bucket — for range gating
+	// that's benign, while being 15-minutes-recent is not. The res IN (...) keeps
+	// the (res,hash,ts) primary key seekable (one prefix seek per tier; a bare
+	// hash predicate would full-scan on the global series' hot poll path).
 	var ts sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, `SELECT MIN(ts) FROM samples WHERE res='raw' AND hash=?`, hash).Scan(&ts); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT MIN(ts) FROM samples
+		WHERE res IN ('raw','1m','1h','1d') AND hash=?`, hash).Scan(&ts); err != nil {
 		return 0, err
 	}
 	if !ts.Valid {
@@ -858,4 +942,7 @@ func (s *Store) FirstSeen(ctx context.Context) map[string]int64 {
 	return out
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.stopOnce.Do(func() { close(s.stop) })
+	return s.db.Close()
+}

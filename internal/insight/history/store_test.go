@@ -541,7 +541,7 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 	}
 
 	// Derived rate at an active grid slot should be exactly 1 MiB/s down, 512 KiB/s up.
-	// A short range keeps the raw grid under the decimation target (exact, no averaging).
+	// A short range keeps the raw grid small (the grid always ships complete).
 	ser, err := s.Query(context.Background(), 30, "")
 	if err != nil {
 		t.Fatal(err)
@@ -585,6 +585,9 @@ func TestCumulativeDerivationDedupRollupGC(t *testing.T) {
 		t.Fatal("per-torrent row not written")
 	}
 	s.now = func() int64 { return base + 500 } // past seenGrace(300s), within raw retain(900s)
+	// GC trusts last_seen staleness only while polls are flowing — deliver the
+	// post-removal (empty) torrent set as a real poll, then collect.
+	s.Sample(nil, model.Globals{}, base+500)
 	s.maintain()
 	if got := rawCount(t, s, "BBB"); got != 0 {
 		t.Fatalf("removed torrent BBB still has %d rows after GC", got)
@@ -615,7 +618,7 @@ func TestIdleGapZeroFill(t *testing.T) {
 	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 3 * MB}}, model.Globals{}, base+120)
 	s.Sample([]model.Torrent{{Hash: "X", DownTotal: 4 * MB}}, model.Globals{}, base+121)
 
-	// range 130s → raw tier, step 1, grid [base-9, base+121] = 131 slots (< target, no decimation).
+	// range 130s → raw tier, step 1, grid [base-9, base+121] = 131 slots.
 	ser, err := s.Query(context.Background(), 130, "")
 	if err != nil {
 		t.Fatal(err)

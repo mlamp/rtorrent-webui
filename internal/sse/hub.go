@@ -4,7 +4,6 @@ package sse
 
 import (
 	"sync"
-	"sync/atomic"
 )
 
 // Message is a pre-encoded SSE event.
@@ -34,7 +33,6 @@ type Hub struct {
 	mu         sync.RWMutex
 	subs       map[*Subscriber]struct{}
 	latestSnap *Message
-	count      atomic.Int64
 	onFirst    func()
 	onZero     func()
 }
@@ -44,7 +42,9 @@ func NewHub() *Hub {
 }
 
 // OnActivity registers callbacks for subscriber-count 0->1 and 1->0, used to
-// start/stop the poller on demand.
+// start/stop the poller on demand. Callbacks run synchronously under the hub
+// lock so transitions stay strictly ordered; they must not call back into the
+// Hub.
 func (h *Hub) OnActivity(first, zero func()) {
 	h.mu.Lock()
 	h.onFirst, h.onZero = first, zero
@@ -70,11 +70,13 @@ func (h *Hub) Subscribe() *Subscriber {
 		default:
 		}
 	}
-	onFirst := h.onFirst
-	h.mu.Unlock()
-	if h.count.Add(1) == 1 && onFirst != nil {
-		onFirst()
+	// Invoked under h.mu: a callback decided outside the lock could land out of
+	// order (e.g. a stale onZero after a newer onFirst, parking the poller while
+	// a client is connected).
+	if len(h.subs) == 1 && h.onFirst != nil {
+		h.onFirst()
 	}
+	h.mu.Unlock()
 	return s
 }
 
@@ -86,11 +88,11 @@ func (h *Hub) Unsubscribe(s *Subscriber) {
 		return
 	}
 	delete(h.subs, s)
-	onZero := h.onZero
-	h.mu.Unlock()
-	if h.count.Add(-1) == 0 && onZero != nil {
-		onZero()
+	// Under h.mu for the same ordering reason as Subscribe.
+	if len(h.subs) == 0 && h.onZero != nil {
+		h.onZero()
 	}
+	h.mu.Unlock()
 }
 
 // Broadcast sends to all subscribers without blocking; a full buffer (slow

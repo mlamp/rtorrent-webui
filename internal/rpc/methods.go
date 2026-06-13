@@ -58,7 +58,12 @@ func DataURI(torrent []byte) string {
 
 // Load adds a torrent. uri may be a magnet:, http(s) URL, local path, or a
 // data: URI (see DataURI). cmds are extra commands applied to the new download,
-// e.g. "d.custom1.set=label", "d.directory.set=/downloads". start begins it now.
+// e.g. "d.custom1.set=mylabel". start begins it now.
+//
+// CAUTION: rtorrent re-parses every cmd with its full command grammar (','
+// splits args, ';' splits commands, and a parsed argument beginning with '$'
+// is EXECUTED as a command). Any user-controlled value embedded in a cmd must
+// be escaped with QuoteCommandValue and pre-screened for a leading '$'.
 func (c *Client) Load(ctx context.Context, start bool, uri string, cmds ...string) error {
 	method := "load.normal"
 	if start {

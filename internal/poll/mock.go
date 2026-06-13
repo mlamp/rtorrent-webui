@@ -3,6 +3,7 @@ package poll
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/mlamp/rtorrent-webui/internal/model"
 )
@@ -53,7 +54,12 @@ func MockSource(n int) Source {
 		ulTotal += tor[i].Size / 4
 		dlTotal += tor[i].Size
 	}
+	// In -mock mode this one closure is shared by the poller goroutine and the
+	// HTTP handlers (api.SetSource), so the mutable sim state needs a lock.
+	var mu sync.Mutex
 	return func(_ context.Context) ([]model.Torrent, model.Globals, error) {
+		mu.Lock()
+		defer mu.Unlock()
 		tick++
 		var g model.Globals
 		g.TorrentCount = n
@@ -75,7 +81,6 @@ func MockSource(n int) Source {
 				if t.UpTotal += t.UpRate; t.Completed > 0 {
 					t.Ratio = t.UpTotal * 1000 / t.Completed
 				}
-				g.ActiveCount++
 			} else {
 				t.DownRate = 0
 				if t.Status == model.StatusSeeding {
@@ -92,6 +97,10 @@ func MockSource(n int) Source {
 			}
 			g.DownRate += t.DownRate
 			g.UpRate += t.UpRate
+			// same definition of "active" as the real poll path (rpc/torrents.go)
+			if t.DownRate > 0 || t.UpRate > 0 {
+				g.ActiveCount++
+			}
 		}
 		dlTotal += g.DownRate
 		ulTotal += g.UpRate

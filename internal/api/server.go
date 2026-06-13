@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/mlamp/rtorrent-webui/internal/config"
 	"github.com/mlamp/rtorrent-webui/internal/insight/history"
 	"github.com/mlamp/rtorrent-webui/internal/insight/search"
 	"github.com/mlamp/rtorrent-webui/internal/model"
@@ -28,9 +29,14 @@ type Server struct {
 	hub    *sse.Hub
 	rpc    *rpc.Client
 	detail DetailRPC // detail-tab data source (defaults to rpc; swapped in -mock mode)
-	// source, when set (-mock mode), feeds the torrents/stats/health endpoints
-	// instead of dialing rtorrent — same shape as poll.Source / rpc.Client.Poll.
-	source  func(context.Context) ([]model.Torrent, model.Globals, error)
+	// source, when set, feeds /api/torrents and /api/stats instead of dialing
+	// rtorrent per request — same shape as poll.Source / rpc.Client.Poll. Normal
+	// mode wires the shared poll source (first-seen overlay included); -mock mode
+	// wires the synthetic one.
+	source func(context.Context) ([]model.Torrent, model.Globals, error)
+	// mock short-circuits the /healthz rtorrent probe: in -mock mode there is no
+	// daemon whose reachability could meaningfully be reported.
+	mock    bool
 	view    string
 	name    string // optional instance label surfaced to the SPA via /api/version
 	geo     GeoLookup
@@ -39,8 +45,10 @@ type Server struct {
 	search  *search.Registry
 
 	rpcPassthrough bool
-	rpcAllow       map[string]bool
-	rpcDeny        map[string]bool
+	rpcAllow       config.MethodSet
+	rpcDeny        config.MethodSet
+
+	maxUpload int64 // .torrent upload cap in bytes (max_upload_mb)
 
 	mux *http.ServeMux
 }
@@ -49,7 +57,7 @@ func New(hub *sse.Hub, r *rpc.Client, view string) *Server {
 	if view == "" {
 		view = "main"
 	}
-	s := &Server{hub: hub, rpc: r, detail: r, view: view, mux: http.NewServeMux()}
+	s := &Server{hub: hub, rpc: r, detail: r, view: view, maxUpload: maxUploadBytes, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
@@ -58,16 +66,20 @@ func New(hub *sse.Hub, r *rpc.Client, view string) *Server {
 // pieces). Used by -mock mode so the detail view works without a live rtorrent.
 func (s *Server) SetDetailRPC(d DetailRPC) { s.detail = d }
 
-// SetSource overrides the torrents/stats/health data source. Used by -mock mode
-// so /healthz, /api/torrents and /api/stats serve synthetic data instead of
-// dialing the absent rtorrent socket (which otherwise burns the dial-retry
-// budget and 503s). Without it those endpoints go to the live rtorrent client.
+// SetSource overrides the /api/torrents and /api/stats data source. The wiring
+// always sets it (normal mode: the shared poll source, so one-shot GETs serve
+// the same first-seen-overlaid data as the SSE stream; -mock mode: the
+// synthetic source). Without it those endpoints dial the live rtorrent client.
 func (s *Server) SetSource(src func(context.Context) ([]model.Torrent, model.Globals, error)) {
 	s.source = src
 }
 
-// poll returns the current torrents+globals from the mock source when one is
-// set (-mock mode), otherwise from the live rtorrent client.
+// SetMockMode marks this server as running without a daemon: /healthz reports
+// always-ok instead of probing the (absent) rtorrent socket.
+func (s *Server) SetMockMode(on bool) { s.mock = on }
+
+// poll returns the current torrents+globals from the wired source when one is
+// set, otherwise from the live rtorrent client.
 func (s *Server) poll(ctx context.Context) ([]model.Torrent, model.Globals, error) {
 	if s.source != nil {
 		return s.source(ctx)
@@ -98,6 +110,15 @@ func writeOK(w http.ResponseWriter, data any) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data})
 }
 
+// writeOKStatus is writeOK with an explicit status code. Headers must be set
+// BEFORE WriteHeader freezes them — a late Content-Type would be ignored and
+// the JSON body sniffed as text/plain.
+func writeOKStatus(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data})
+}
+
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -121,7 +142,7 @@ func writeRPCErr(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if s.source != nil { // -mock mode: no daemon to probe, always healthy
+	if s.mock { // -mock mode: no daemon to probe, always healthy
 		writeOK(w, map[string]bool{"ok": true})
 		return
 	}

@@ -14,8 +14,15 @@ func (c *Client) Stop(ctx context.Context, hash string) error {
 	return c.action(ctx, "d.stop", hash)
 }
 
-// Pause closes the download's files but keeps it in the list.
+// Pause closes the download's files but keeps it in the list. d.stop first: a
+// bare d.close leaves the download visible in the started view with persisted
+// d.state=1, so a later Start is a no-op (view.set_visible never re-fires the
+// resume event) and the daemon silently resumes the torrent on restart. This
+// mirrors the daemon UI's own close gesture ("d.stop=; d.close=").
 func (c *Client) Pause(ctx context.Context, hash string) error {
+	if err := c.action(ctx, "d.stop", hash); err != nil {
+		return err
+	}
 	return c.action(ctx, "d.close", hash)
 }
 func (c *Client) Recheck(ctx context.Context, hash string) error {

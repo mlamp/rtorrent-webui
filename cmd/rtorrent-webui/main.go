@@ -14,7 +14,6 @@ import (
 	"github.com/mlamp/rtorrent-webui/internal/api"
 	"github.com/mlamp/rtorrent-webui/internal/config"
 	"github.com/mlamp/rtorrent-webui/internal/insight/geoip"
-	"github.com/mlamp/rtorrent-webui/internal/insight/history"
 	"github.com/mlamp/rtorrent-webui/internal/insight/search"
 	"github.com/mlamp/rtorrent-webui/internal/insight/system"
 	"github.com/mlamp/rtorrent-webui/internal/model"
@@ -78,31 +77,30 @@ func main() {
 
 	rpcClient := rpc.New(scgi.New(cfg.Rtorrent.Socket, cfg.Rtorrent.MaxInflight, 3*time.Second, cfg.Rtorrent.RPCTimeout.D()))
 
-	// Set when history is enabled (below). The live poll source overlays each
-	// torrent's stable "added" time from the history store's first_seen record —
-	// rtorrent has no reliable added-at of its own.
-	var histStore *history.Store
+	// One-time data hatch: rebuild the global series from the per-torrent rows
+	// and exit, before the poll loop / server start.
+	if *rebuildHistory {
+		n, err := runRebuildHistory(context.Background(), cfg.Insight.HistoryDB)
+		if err != nil {
+			logger.Fatalf("rebuild-history: %v", err)
+		}
+		logger.Printf("rebuild-history: wrote %d global rows from per-torrent series; exiting", n)
+		os.Exit(0)
+	}
+
+	// nil when history is disabled. The live poll source overlays each torrent's
+	// stable "added" time from the history store's first_seen record — rtorrent
+	// has no reliable added-at of its own.
+	histStore := openHistory(cfg.Insight.HistoryDB, *mock, logger)
 
 	var src poll.Source
 	if *mock > 0 {
 		src = poll.MockSource(*mock)
 		logger.Printf("MOCK mode: %d synthetic torrents", *mock)
 	} else {
-		src = func(ctx context.Context) ([]model.Torrent, model.Globals, error) {
-			torrents, g, err := rpcClient.Poll(ctx, cfg.Rtorrent.View)
-			if err != nil {
-				return torrents, g, err
-			}
-			if histStore != nil {
-				fs := histStore.FirstSeen(ctx)
-				for i := range torrents {
-					if v, ok := fs[torrents[i].Hash]; ok && v > 0 {
-						torrents[i].Added = v // stable first-seen overrides metainfo creation_date
-					}
-				}
-			}
-			return torrents, g, err
-		}
+		src = overlayFirstSeen(func(ctx context.Context) ([]model.Torrent, model.Globals, error) {
+			return rpcClient.Poll(ctx, cfg.Rtorrent.View)
+		}, histStore)
 	}
 
 	hub := sse.NewHub()
@@ -115,9 +113,9 @@ func main() {
 	srv.SetName(cfg.Server.Name)
 	srv.SetSearch(search.NewRegistry()) // seam only in v1
 	srv.SetDirs(cfg.Downloads.Dirs)
+	srv.SetMaxUploadBytes(int64(cfg.Rtorrent.MaxUploadMB) << 20)
 	if *mock > 0 {
 		srv.SetDetailRPC(poll.NewMockDetail()) // detail tabs work without a live rtorrent
-		srv.SetSource(src)                     // /healthz + /api/torrents + /api/stats serve mock data too
 	}
 
 	if cfg.Insight.GeoIPDB != "" {
@@ -128,34 +126,14 @@ func main() {
 			logger.Printf("geoip disabled: %v", err)
 		}
 	}
-	if *rebuildHistory && cfg.Insight.HistoryDB == "" {
-		logger.Fatal("-rebuild-history needs a history DB (set insight.history_db or -history-db)")
-	}
-	if cfg.Insight.HistoryDB != "" {
-		if h, err := history.New(cfg.Insight.HistoryDB); err == nil {
-			// One-time data hatch: rebuild the global series from per-torrent rows and
-			// exit, before the poll loop / server start.
-			if *rebuildHistory {
-				n, rerr := h.RebuildGlobalFromTorrents(context.Background())
-				if rerr != nil {
-					logger.Fatalf("rebuild-history: %v", rerr)
-				}
-				logger.Printf("rebuild-history: wrote %d global rows from per-torrent series; exiting", n)
-				_ = h.Close()
-				os.Exit(0)
-			}
-			histStore = h
-			srv.SetHistory(h)
-			// One combined sink per tick: cumulative transfer counters + system gauges.
-			sysColl := system.New()
-			poller.SetSink(func(torrents []model.Torrent, g model.Globals, ts int64) {
-				h.Sample(torrents, g, ts)
-				h.SampleGauges(sysColl.Collect(torrents, g), ts)
-			})
-			logger.Printf("history: %s (tiers raw 15m / 1m 24h / 1h 7d / 1d 1y; +system metrics)", cfg.Insight.HistoryDB)
-		} else {
-			logger.Printf("history disabled: %v", err)
-		}
+	if histStore != nil {
+		srv.SetHistory(histStore)
+		// One combined sink per tick: cumulative transfer counters + system gauges.
+		sysColl := system.New()
+		poller.SetSink(func(torrents []model.Torrent, g model.Globals, ts int64) {
+			histStore.Sample(torrents, g, ts)
+			histStore.SampleGauges(sysColl.Collect(torrents, g), ts)
+		})
 	}
 	if cfg.Features.RPCPassthrough {
 		srv.EnablePassthrough(cfg.Features.RPCAllowlist, cfg.Features.RPCDenylist)
@@ -177,7 +155,7 @@ func main() {
 	// it runs at the idle cadence until a client connects.
 	poller.Start()
 
-	var handler http.Handler = srv.Handler()
+	var handler http.Handler = apiHandler(srv, src, *mock)
 	if cfg.Auth.Mode == "basic" {
 		creds, err := cfg.Auth.Credentials()
 		if err != nil {

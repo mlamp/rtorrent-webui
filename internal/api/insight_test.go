@@ -32,7 +32,7 @@ func TestHandleHistoryWireShape(t *testing.T) {
 	srv := New(sse.NewHub(), nil, "main")
 	srv.SetHistory(st)
 	rec := httptest.NewRecorder()
-	// a short range keeps the raw grid under the decimation target, so the real
+	// a short range keeps the raw grid small, so the real
 	// per-second rate is exact (not averaged away)
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/history?range=30s", nil))
 	if rec.Code != http.StatusOK {

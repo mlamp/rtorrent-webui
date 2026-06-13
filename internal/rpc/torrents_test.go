@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mlamp/rtorrent-webui/internal/model"
@@ -69,6 +70,41 @@ func TestEnrichTrackersCaching(t *testing.T) {
 	c.enrichTrackers(context.Background(), []model.Torrent{{Hash: "EMPTY"}})
 	if _, ok := c.trackerCache["GOOD"]; ok {
 		t.Fatal("removed torrent GOOD must be pruned from the cache")
+	}
+}
+
+func TestEnrichTrackersInvalidationDuringFetchWins(t *testing.T) {
+	c := &Client{trackerCache: map[string]string{}}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	c.batch = func(_ context.Context, items []BatchItem) ([]json.RawMessage, []error, error) {
+		close(entered)
+		<-release // hold the round-trip open while the tracker toggle lands
+		rows, _ := json.Marshal([][]any{{"https://old.example/announce", 1}})
+		return []json.RawMessage{rows}, []error{nil}, nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.enrichTrackers(context.Background(), []model.Torrent{{Hash: "H"}})
+	}()
+	<-entered
+	// SetTrackerEnabled's cache invalidation (detail.go) lands while the enrich
+	// batch is in flight: the batch snapshot is pre-toggle data.
+	c.trackerMu.Lock()
+	delete(c.trackerCache, "H")
+	c.trackerMu.Unlock()
+	close(release)
+	<-done
+
+	// The invalidation must win: caching the pre-toggle host would serve a stale
+	// primary tracker on every poll until the torrent is removed.
+	c.trackerMu.Lock()
+	host, ok := c.trackerCache["H"]
+	c.trackerMu.Unlock()
+	if ok {
+		t.Fatalf("stale pre-toggle host %q resurrected after invalidation; cache must stay empty", host)
 	}
 }
 
@@ -145,6 +181,35 @@ func TestDecodeTorrentsChunks(t *testing.T) {
 	}
 }
 
+func TestPollSurfacesThrottleItemErrors(t *testing.T) {
+	row := make([]any, len(torrentFields))
+	for i := range row {
+		row[i] = 0
+	}
+	row[0], row[1] = "ABC", "name"
+	c, _ := fakeSCGI(t, func(call scgiCall) (any, *Error) {
+		switch call.Method {
+		case "d.multicall2":
+			return [][]any{row}, nil
+		case "t.multicall":
+			return [][]any{}, nil // tracker enrichment is best-effort, not under test
+		default: // the four throttle.* globals fail as per-item errors
+			return nil, &Error{Code: -506, Message: "method not found"}
+		}
+	})
+	_, g, err := c.Poll(context.Background(), "")
+	// Batch delivers per-item failures in errs with the matching result nil;
+	// swallowing them coerces the totals/limits to fabricated zeros (session
+	// counters reset, limits shown as unlimited) with nothing logged. Poll must
+	// surface the failure instead.
+	if err == nil {
+		t.Fatalf("Poll() err = nil with all throttle.* items failing; globals fabricated as %+v", g)
+	}
+	if !strings.Contains(err.Error(), "throttle.global_down.total") {
+		t.Fatalf("Poll() err = %q, want it to name the failed item", err)
+	}
+}
+
 func TestDeriveStatus(t *testing.T) {
 	cases := []struct {
 		name                                       string
@@ -166,6 +231,11 @@ func TestDeriveStatus(t *testing.T) {
 		// unregistered torrent, banned passkey) is authoritative and typically
 		// permanent on single-tracker private torrents: it stays an error
 		{"tracker rejection is an error", 1, 1, 1, 0, 0, `Tracker: [Failure reason "Unregistered torrent"]`, model.StatusError},
+		// a UDP tracker's rejection (BEP-15 error packet) is just as authoritative
+		// as the HTTP "Failure reason" wrapper — libtorrent 0.16 surfaces it as
+		// "tracker message: ...", other revisions as "received error message: ..."
+		{"udp tracker rejection is an error", 1, 1, 1, 0, 100, `Tracker: [tracker message: unregistered torrent]`, model.StatusError},
+		{"udp tracker rejection (alt spelling) is an error", 1, 1, 1, 0, 100, `Tracker: [received error message: unregistered torrent]`, model.StatusError},
 	}
 	for _, c := range cases {
 		if got := deriveStatus(c.state, c.isActive, c.isOpen, c.isHashCheck, c.left, c.message); got != c.want {

@@ -27,11 +27,12 @@ var connectBudget = 4 * time.Second
 // each response, so every call dials a fresh connection; the semaphore bounds how
 // many hit rtorrent's single RPC thread at once.
 type Client struct {
-	network     string // "unix" or "tcp"
-	address     string
-	sem         chan struct{}
-	dialTimeout time.Duration // per-attempt connect timeout (fail fast if down)
-	readTimeout time.Duration // whole request after connect (nginx scgi_read_timeout parity)
+	network       string // "unix" or "tcp"
+	address       string
+	sem           chan struct{}
+	dialTimeout   time.Duration // per-attempt connect timeout (fail fast if down)
+	readTimeout   time.Duration // whole request after connect (nginx scgi_read_timeout parity)
+	connectBudget time.Duration // total retry budget for a refused/failed dial
 }
 
 // New builds a client. addr forms:
@@ -54,11 +55,21 @@ func New(addr string, maxInflight int, dialTimeout, readTimeout time.Duration) *
 		readTimeout = 60 * time.Second
 	}
 	return &Client{
-		network:     network,
-		address:     address,
-		sem:         make(chan struct{}, maxInflight),
-		dialTimeout: dialTimeout,
-		readTimeout: readTimeout,
+		network:       network,
+		address:       address,
+		sem:           make(chan struct{}, maxInflight),
+		dialTimeout:   dialTimeout,
+		readTimeout:   readTimeout,
+		connectBudget: connectBudget,
+	}
+}
+
+// SetConnectBudget overrides the total dial-retry budget (default connectBudget).
+// A smaller budget makes a genuinely-down daemon surface as ErrUnreachable
+// sooner; tests use it to keep the down-daemon path fast and deterministic.
+func (c *Client) SetConnectBudget(d time.Duration) {
+	if d > 0 {
+		c.connectBudget = d
 	}
 }
 
@@ -83,7 +94,7 @@ func (c *Client) Addr() string { return c.network + ":" + c.address }
 // fast daemon restart so it never surfaces; a genuinely-down daemon exhausts the
 // budget and returns ErrUnreachable.
 func (c *Client) dial(ctx context.Context) (net.Conn, error) {
-	giveUp := time.Now().Add(connectBudget)
+	giveUp := time.Now().Add(c.connectBudget)
 	if dl, ok := ctx.Deadline(); ok && dl.Before(giveUp) {
 		giveUp = dl
 	}
@@ -139,8 +150,31 @@ func (c *Client) Do(ctx context.Context, contentType string, body []byte) ([]byt
 	}
 	_ = conn.SetDeadline(deadline)
 
+	// A ctx *deadline* is folded into the conn deadline above, but a ctx
+	// *cancellation* (caller gone, server shutdown) would otherwise go unseen
+	// until that deadline fires — pinning a semaphore slot the whole time. The
+	// watcher yanks the deadline to fail the in-flight Write/ReadAll at once;
+	// closing watchDone when Do returns guarantees it never leaks.
+	watchDone := make(chan struct{})
+	defer close(watchDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.SetDeadline(time.Now())
+		case <-watchDone:
+		}
+	}()
+	// ctxErr re-classifies the i/o timeout a yanked deadline produces as the
+	// ctx error the caller actually caused; real i/o faults pass through.
+	ctxErr := func(err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
+		return err
+	}
+
 	if _, err := conn.Write(encodeRequest(contentType, body)); err != nil {
-		return nil, fmt.Errorf("scgi write %s: %w", c.Addr(), err)
+		return nil, fmt.Errorf("scgi write %s: %w", c.Addr(), ctxErr(err))
 	}
 	// Signal end-of-request; rtorrent half-closes after it responds.
 	if cw, ok := conn.(interface{ CloseWrite() error }); ok {
@@ -149,7 +183,7 @@ func (c *Client) Do(ctx context.Context, contentType string, body []byte) ([]byt
 
 	raw, err := io.ReadAll(conn)
 	if err != nil {
-		return nil, fmt.Errorf("scgi read %s: %w", c.Addr(), err)
+		return nil, fmt.Errorf("scgi read %s: %w", c.Addr(), ctxErr(err))
 	}
 	return parseResponse(raw)
 }

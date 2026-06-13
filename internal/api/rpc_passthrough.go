@@ -3,21 +3,16 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/mlamp/rtorrent-webui/internal/config"
 )
 
-// EnablePassthrough turns on POST /api/rpc with optional allow/deny method lists.
+// EnablePassthrough turns on POST /api/rpc with optional allow/deny method
+// lists. Entries ending in '*' match the whole method-name prefix (family).
 func (s *Server) EnablePassthrough(allow, deny []string) {
 	s.rpcPassthrough = true
-	s.rpcAllow = toSet(allow)
-	s.rpcDeny = toSet(deny)
-}
-
-func toSet(ss []string) map[string]bool {
-	m := make(map[string]bool, len(ss))
-	for _, s := range ss {
-		m[s] = true
-	}
-	return m
+	s.rpcAllow = config.NewMethodSet(allow)
+	s.rpcDeny = config.NewMethodSet(deny)
 }
 
 func (s *Server) handleRPCPassthrough(w http.ResponseWriter, r *http.Request) {
@@ -33,11 +28,11 @@ func (s *Server) handleRPCPassthrough(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "expected {method, params}")
 		return
 	}
-	if s.rpcDeny[req.Method] {
+	if s.rpcDeny.Matches(req.Method) {
 		writeErr(w, http.StatusForbidden, "denied", "method is denied: "+req.Method)
 		return
 	}
-	if len(s.rpcAllow) > 0 && !s.rpcAllow[req.Method] {
+	if !s.rpcAllow.Empty() && !s.rpcAllow.Matches(req.Method) {
 		writeErr(w, http.StatusForbidden, "not_allowed", "method not in allowlist: "+req.Method)
 		return
 	}

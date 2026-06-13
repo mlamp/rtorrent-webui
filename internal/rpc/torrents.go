@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/mlamp/rtorrent-webui/internal/model"
 )
@@ -69,8 +70,12 @@ func (c *Client) Poll(ctx context.Context, view string) ([]model.Torrent, model.
 	if err != nil {
 		return nil, model.Globals{}, err
 	}
-	if errs[0] != nil {
-		return nil, model.Globals{}, fmt.Errorf("d.multicall2: %w", errs[0])
+	// A per-item failure leaves its results slot nil, which asInt would silently
+	// coerce to 0 — fabricated totals/limits. Surface every item's error instead.
+	for i, e := range errs {
+		if e != nil {
+			return nil, model.Globals{}, fmt.Errorf("%s: %w", items[i].Method, e)
+		}
 	}
 
 	torrents, err := decodeTorrents(results[0])
@@ -97,12 +102,26 @@ func (c *Client) Poll(ctx context.Context, view string) ([]model.Torrent, model.
 	return torrents, g, nil
 }
 
+// trackerFetchSeq numbers enrichTrackers flights so each parks a unique
+// in-flight marker in the cache and never commits over another flight's work.
+var trackerFetchSeq atomic.Uint64
+
 // enrichTrackers fills t.Tracker with each torrent's primary tracker host.
 // d.multicall2 can't return the announce URL, so we fetch t.url/t.is_enabled per
 // hash — but only for hashes we haven't cached yet (the host is static), batched
 // into a single SCGI round-trip. Best-effort: a failed/empty lookup is left blank
 // and retried next poll, never cached as a false value.
+//
+// The batch round-trip runs without trackerMu held, so SetTrackerEnabled's cache
+// invalidation can land mid-flight; writing the pre-toggle host afterwards would
+// serve a stale primary tracker until the torrent is removed. Each flight
+// therefore parks a marker in the cache slot while it fetches and only commits
+// while its own marker is still there — a mid-flight delete (or a newer flight's
+// marker) wins and the stale result is dropped.
 func (c *Client) enrichTrackers(ctx context.Context, torrents []model.Torrent) {
+	// A NUL byte can never start a real host, so marked slots are unambiguous.
+	mark := "\x00fetch:" + strconv.FormatUint(trackerFetchSeq.Add(1), 10)
+
 	// Prune cache entries for torrents no longer present (bounds growth on a daemon
 	// that runs for weeks with add/remove churn), and collect the uncached hashes.
 	present := make(map[string]struct{}, len(torrents))
@@ -117,10 +136,15 @@ func (c *Client) enrichTrackers(ctx context.Context, torrents []model.Torrent) {
 		}
 	}
 	for i := range torrents {
-		if host, ok := c.trackerCache[torrents[i].Hash]; ok {
-			torrents[i].Tracker = host
-		} else {
+		host, ok := c.trackerCache[torrents[i].Hash]
+		switch {
+		case !ok:
 			needIdx = append(needIdx, i)
+			c.trackerCache[torrents[i].Hash] = mark
+		case strings.HasPrefix(host, "\x00"):
+			// another poll's fetch is in flight: leave blank, its result lands next poll
+		default:
+			torrents[i].Tracker = host
 		}
 	}
 	c.trackerMu.Unlock()
@@ -133,20 +157,26 @@ func (c *Client) enrichTrackers(ctx context.Context, torrents []model.Torrent) {
 		items[j] = BatchItem{Method: "t.multicall", Params: []any{torrents[i].Hash, "", "t.url=", "t.is_enabled="}}
 	}
 	results, errs, err := c.batch(ctx, items)
-	if err != nil {
-		return // transport error: leave blank, retry next poll
-	}
 
 	c.trackerMu.Lock()
 	defer c.trackerMu.Unlock()
 	for j, i := range needIdx {
-		if errs[j] != nil {
-			continue // failed row: leave blank, NOT cached, retried next poll
+		h := torrents[i].Hash
+		if c.trackerCache[h] != mark {
+			continue // invalidated (or pruned) mid-flight: our snapshot is stale, drop it
 		}
-		if host := primaryTrackerHost(results[j]); host != "" {
-			c.trackerCache[torrents[i].Hash] = host
-			torrents[i].Tracker = host
+		host := ""
+		if err == nil && errs[j] == nil {
+			host = primaryTrackerHost(results[j])
 		}
+		if host == "" {
+			// transport error / failed row / no trackers: clear the marker so the
+			// hash is left blank, NOT cached, and retried next poll.
+			delete(c.trackerCache, h)
+			continue
+		}
+		c.trackerCache[h] = host
+		torrents[i].Tracker = host
 	}
 }
 
@@ -261,14 +291,30 @@ func deriveStatus(state, isActive, isOpen, isHashChecking, left int64, message s
 // the message as a warning; per-tracker failure counters in the detail view say
 // which tracker is sick.
 //
-// A tracker REJECTION is different: libtorrent wraps an announce response whose
-// body carries a "failure reason" key (unregistered torrent, banned passkey) as
-// `Tracker: [Failure reason "..."]` (tracker_http.cc). That's an authoritative
-// answer, typically from a single-tracker private torrent where nothing ever
-// clears it — it stays an error so the ERROR filter still finds dead torrents.
+// A tracker REJECTION is different: an authoritative answer (unregistered
+// torrent, banned passkey), typically from a single-tracker private torrent
+// where nothing ever clears it — it stays an error so the ERROR filter still
+// finds dead torrents. libtorrent surfaces rejections in two shapes: an HTTP
+// announce response whose body carries a "failure reason" key becomes
+// `Tracker: [Failure reason "..."]` (tracker_http.cc), and a UDP tracker's
+// BEP-15 error packet becomes `Tracker: [tracker message: ...]`
+// (tracker_udp.cc; other libtorrent revisions spell it
+// `received error message: ...`).
 func isTrackerWarning(message string) bool {
-	return strings.HasPrefix(message, "Tracker: [") &&
-		!strings.HasPrefix(message, `Tracker: [Failure reason`)
+	const wrap = "Tracker: ["
+	if !strings.HasPrefix(message, wrap) {
+		return false
+	}
+	for _, rejection := range []string{
+		`Failure reason`,          // HTTP "failure reason" body
+		`tracker message:`,        // UDP error packet (libtorrent 0.16)
+		`received error message:`, // UDP error packet (other libtorrent revisions)
+	} {
+		if strings.HasPrefix(message[len(wrap):], rejection) {
+			return false
+		}
+	}
+	return true
 }
 
 // --- tolerant value coercion (rtorrent mixes JSON numbers and strings) ---

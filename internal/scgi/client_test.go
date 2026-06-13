@@ -3,9 +3,11 @@ package scgi
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -83,5 +85,94 @@ func TestDoRetryRidesLateListener(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Do did not complete in time")
+	}
+}
+
+// A daemon killed mid-write shows up as a clean EOF on the close-delimited
+// read, so the declared Content-Length is the only truncation signal. Do must
+// reject the short body instead of returning it as a successful response.
+func TestDoTruncatedResponseReturnsError(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "rt.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Read(make([]byte, 4096)) // drain the request
+		// Declare 1000 body bytes, deliver 10, then close — a crash mid-write.
+		_, _ = conn.Write([]byte("Status: 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"ok\":1234"))
+	}()
+
+	c := New(sock, 1, time.Second, 2*time.Second)
+	body, err := c.Do(context.Background(), "application/json", []byte(`{}`))
+	if err == nil {
+		t.Fatalf("expected an error for a truncated response, got body %q", body)
+	}
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("error not classifiable as io.ErrUnexpectedEOF: %v", err)
+	}
+}
+
+// A ctx cancellation after connect must abort the in-flight read promptly —
+// releasing the shared semaphore slot — instead of blocking until the read
+// deadline, and whatever watches for it must not leak a goroutine.
+func TestDoContextCancelAbortsReadWithoutLeak(t *testing.T) {
+	sock := filepath.Join(shortDir(t), "rt.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	hold := make(chan struct{}) // keeps the server side open, never replying
+	defer close(hold)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, conn) // drain the request, then stall
+		<-hold
+		_ = conn.Close()
+	}()
+
+	c := New(sock, 1, time.Second, 2*time.Second)
+	before := runtime.NumGoroutine()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err = c.Do(ctx, "application/json", []byte(`{}`))
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error from the cancelled request")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error not classifiable as context.Canceled: %v", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("Do blocked %v after cancellation; want a prompt return", elapsed)
+	}
+
+	// Everything Do spawned must be gone once it returns; the server goroutine
+	// above is already counted in the baseline.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutine leak: %d before Do, %d after", before, runtime.NumGoroutine())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

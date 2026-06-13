@@ -4,6 +4,7 @@
   import MetricChart from '../charts/MetricChart.svelte'
   import { globals } from '$lib/stores/globals.svelte'
   import { silentGet } from '$lib/api/client'
+  import { latestOnly } from '$lib/latest'
   import { short } from '$lib/format'
 
   type Point = { t: number; down: number; up: number }
@@ -16,18 +17,20 @@
   let metrics = $state<Record<string, GPoint[]>>({})
   const ranges = ['15m', '1h', '6h', '24h', '7d']
 
-  async function loadHistory() {
-    const d = await silentGet<{ points: Point[]; start: number; end: number }>(`/api/history?range=${range}`)
-    if (d) {
+  // Guard against out-of-order responses: a slow fetch for a range the user has
+  // since left (or a stale interval poll) must not overwrite the current one.
+  const loadHistory = latestOnly(
+    () => silentGet<{ points: Point[]; start: number; end: number }>(`/api/history?range=${range}`),
+    (d) => {
       points = d.points ?? []
       winStart = d.start ?? 0
       winEnd = d.end ?? 0
-    }
-  }
-  async function loadMetrics() {
-    const d = await silentGet<Record<string, GPoint[]>>(`/api/metrics?range=${range}`)
-    if (d) metrics = d
-  }
+    },
+  )
+  const loadMetrics = latestOnly(
+    () => silentGet<Record<string, GPoint[]>>(`/api/metrics?range=${range}`),
+    (d) => (metrics = d),
+  )
   async function loadDisk() {
     const d = await silentGet<typeof disks>('/api/diskspace')
     if (d) disks = d

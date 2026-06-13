@@ -34,12 +34,19 @@ func SPAHandler() http.Handler {
 			upath = "index.html"
 		}
 		if f, err := root.Open(upath); err == nil {
+			info, err := f.Stat()
 			f.Close()
-			if strings.HasPrefix(upath, "assets/") {
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			// Directories fall through to the SPA shell; serving them via
+			// FileServer would emit a redirect or a generated listing.
+			if err == nil && !info.IsDir() {
+				if strings.HasPrefix(upath, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else if upath == "index.html" {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
+				fileServer.ServeHTTP(w, r)
+				return
 			}
-			fileServer.ServeHTTP(w, r)
-			return
 		}
 		// Not a real file → serve the SPA shell.
 		w.Header().Set("Cache-Control", "no-cache")

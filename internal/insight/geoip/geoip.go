@@ -28,13 +28,14 @@ func (g *Reader) Country(ip string) string {
 	if err != nil {
 		return ""
 	}
+	// Hold the read lock across the lookup so Close cannot unmap the mmdb
+	// out from under an in-flight Country call.
 	g.mu.RLock()
-	r := g.r
-	g.mu.RUnlock()
-	if r == nil {
+	defer g.mu.RUnlock()
+	if g.r == nil {
 		return ""
 	}
-	rec, err := r.Country(addr)
+	rec, err := g.r.Country(addr)
 	if err != nil || rec == nil {
 		return ""
 	}
@@ -44,8 +45,10 @@ func (g *Reader) Country(ip string) string {
 func (g *Reader) Close() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.r != nil {
-		return g.r.Close()
+	if g.r == nil {
+		return nil
 	}
-	return nil
+	err := g.r.Close()
+	g.r = nil // later Country calls must see a closed reader as absent
+	return err
 }

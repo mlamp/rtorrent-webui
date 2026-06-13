@@ -32,6 +32,14 @@ run = "go run ./cmd/rtorrent-webui -config config.example.toml"
 # explicit paths so `go` never walks web/node_modules
 run = "go test ./cmd/... ./internal/..."
 
+[tasks.test-race]
+# The race detector needs cgo — override the global CGO_ENABLED=0 pin (which
+# exists only to keep release builds static) for this task. The concurrency
+# regression tests (poll mock, geoip close, sse hub, scgi cancel) only bite
+# under -race, so run this before shipping concurrency changes.
+env = { CGO_ENABLED = "1" }
+run = "go test -race -count=1 ./cmd/... ./internal/... ./web/..."
+
 [tasks.screenshot]
 dir = "web"
 run = "pnpm exec playwright test e2e/screenshot.spec.ts"

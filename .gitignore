@@ -17,3 +17,7 @@ web/*.tsbuildinfo
 .DS_Store
 *.log
 /data/
+
+# Go coverage artifacts (coverage/history.csv stays tracked)
+coverage/coverage.out
+coverage/coverage.html
