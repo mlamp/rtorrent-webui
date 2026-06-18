@@ -60,6 +60,12 @@ type User struct {
 type Downloads struct {
 	Dirs       []string `toml:"dirs"`
 	DefaultDir string   `toml:"default_dir"`
+	// Browse force-enables the read-only directory browser (GET /api/fs) even on
+	// a TCP transport. By default the browser is on only for a unix-socket
+	// (same-host) daemon, since a webui-side listing reflects the daemon's view
+	// only on a shared mount. Set this true ONLY when the webui and daemon share
+	// an identical mount of downloads.dirs across the split.
+	Browse bool `toml:"browse"`
 }
 
 type Insight struct {

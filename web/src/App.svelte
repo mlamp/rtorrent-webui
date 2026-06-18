@@ -9,6 +9,7 @@
   import type { Connection } from '$lib/stores/globals.svelte'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
+  import { removeDialog } from '$lib/stores/removeDialog.svelte'
   import { config } from '$lib/stores/config.svelte'
   import { connectSSE } from '$lib/api/sse'
   import { api, bulk } from '$lib/api/client'
@@ -16,6 +17,7 @@
   import SpeedGraph from './components/SpeedGraph.svelte'
   import TorrentTable from './components/table/TorrentTable.svelte'
   import DetailModal from './components/detail/DetailModal.svelte'
+  import RemoveDialog from './components/ui/RemoveDialog.svelte'
   import AddTorrentDialog from './components/toolbar/AddTorrentDialog.svelte'
   import ThrottleDialog from './components/toolbar/ThrottleDialog.svelte'
   import HelpDialog from './components/ui/HelpDialog.svelte'
@@ -32,9 +34,14 @@
   const targets = (): string[] => (selection.size ? selection.list() : view.cursor ? [view.cursor] : [])
   const startSel = () => bulk(targets(), api.start, 'Started')
   const stopSel = () => bulk(targets(), api.stop, 'Stopped')
-  const removeSel = () => {
-    const hs = targets()
-    bulk(hs, api.remove, 'Removed').then(() => selection.clear())
+  // Remove routes through the shared confirm dialog (warns + optional on-disk
+  // delete); selection is cleared only once the removal is confirmed and runs.
+  const openRemove = () => {
+    const rows = targets()
+      .map((h) => torrents.map.get(h))
+      .filter((t): t is NonNullable<typeof t> => !!t)
+      .map((t) => ({ hash: t.hash, name: t.name }))
+    removeDialog.request(rows, () => selection.clear())
   }
 
   let rtVersion = $state('')
@@ -51,8 +58,13 @@
     // wait on — or get stuck behind — a slow/unreachable daemon.
     fetch('/api/config')
       .then((r) => r.json())
-      .then((j) => (config.name = j?.data?.name ?? ''))
-      .catch(() => {})
+      .then((j) => {
+        config.name = j?.data?.name ?? ''
+        config.deleteWithData = j?.data?.deleteWithData === true
+        config.browse = j?.data?.browse === true
+        config.configState = 'loaded' // LAST: a throw above must not leave a half-populated "loaded" state
+      })
+      .catch(() => (config.configState = 'failed'))
     fetch('/api/version')
       .then((r) => r.json())
       .then((j) => (rtVersion = j?.data?.rtorrent ? `rtorrent ${j.data.rtorrent} · api ${j.data.api}` : ''))
@@ -170,6 +182,8 @@
 
     if (e.key === 'Escape') {
       if (typing) return (e.target as HTMLElement).blur()
+      // remove dialog is top-most once open — one Escape closes only it
+      if (removeDialog.open) return removeDialog.cancel()
       if (helpOpen) return (helpOpen = false)
       if (addOpen) return (addOpen = false)
       if (throttleOpen) return (throttleOpen = false)
@@ -177,7 +191,7 @@
       if (selection.size) return selection.clear()
       return
     }
-    if (typing || addOpen || throttleOpen) return
+    if (typing || addOpen || throttleOpen || removeDialog.open) return
     if (e.key === '?') {
       e.preventDefault()
       helpOpen = !helpOpen
@@ -241,7 +255,7 @@
       case 'Backspace':
       case 'Delete':
         e.preventDefault()
-        removeSel()
+        openRemove()
         break
     }
   }
@@ -261,7 +275,7 @@
   })
 
   const modalTorrent = $derived(detail.activeHash ? torrents.map.get(detail.activeHash) : undefined)
-  const hintVisible = $derived(!addOpen && !throttleOpen && !helpOpen && !detail.activeHash)
+  const hintVisible = $derived(!addOpen && !throttleOpen && !helpOpen && !detail.activeHash && !removeDialog.open)
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -386,7 +400,7 @@
           <div class="bulk-actions">
             <button class="bbtn" onclick={startSel}>▶ RESUME</button>
             <button class="bbtn" onclick={stopSel}>⏸ PAUSE</button>
-            <button class="bbtn danger" onclick={removeSel}>✕ REMOVE</button>
+            <button class="bbtn danger" onclick={openRemove}>✕ REMOVE</button>
           </div>
         </div>
       {/if}
@@ -424,3 +438,5 @@
 {#if modalTorrent}
   <DetailModal t={modalTorrent} />
 {/if}
+<!-- mounted LAST so the confirm dialog's backdrop stacks above the detail modal -->
+<RemoveDialog />

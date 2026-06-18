@@ -75,7 +75,8 @@ func main() {
 		cfg.Downloads.Dirs = strings.Split(*diskDirs, ",")
 	}
 
-	rpcClient := rpc.New(scgi.New(cfg.Rtorrent.Socket, cfg.Rtorrent.MaxInflight, 3*time.Second, cfg.Rtorrent.RPCTimeout.D()))
+	scgiClient := scgi.New(cfg.Rtorrent.Socket, cfg.Rtorrent.MaxInflight, 3*time.Second, cfg.Rtorrent.RPCTimeout.D())
+	rpcClient := rpc.New(scgiClient)
 
 	// One-time data hatch: rebuild the global series from the per-torrent rows
 	// and exit, before the poll loop / server start.
@@ -113,6 +114,12 @@ func main() {
 	srv.SetName(cfg.Server.Name)
 	srv.SetSearch(search.NewRegistry()) // seam only in v1
 	srv.SetDirs(cfg.Downloads.Dirs)
+	srv.SetDefaultDir(cfg.Downloads.DefaultDir)        // additional allowed deletion root
+	srv.SetDeleteWithData(cfg.Features.DeleteWithData) // off unless the operator opts in
+	// Directory browser: on for a unix-socket (same-host) daemon, or when forced
+	// via downloads.browse for a shared-mount split. The endpoint still requires a
+	// resolvable root, so this is a safe no-op when none are configured.
+	srv.SetBrowse(scgiClient.Network() == "unix" || cfg.Downloads.Browse)
 	srv.SetMaxUploadBytes(int64(cfg.Rtorrent.MaxUploadMB) << 20)
 	if *mock > 0 {
 		srv.SetDetailRPC(poll.NewMockDetail()) // detail tabs work without a live rtorrent

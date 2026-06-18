@@ -89,6 +89,11 @@ func parseAddr(addr string) (network, address string) {
 // Addr returns a human-readable "network:address" for logs.
 func (c *Client) Addr() string { return c.network + ":" + c.address }
 
+// Network reports the dial network ("unix" or "tcp"). A unix socket implies the
+// daemon shares this host, which the directory browser uses to decide whether a
+// webui-side filesystem listing reflects the daemon's view.
+func (c *Client) Network() string { return c.network }
+
 // dial connects, retrying a failed/refused dial with exponential backoff until
 // connectBudget (or the caller's ctx deadline) is exhausted. This rides over a
 // fast daemon restart so it never surfaces; a genuinely-down daemon exhausts the

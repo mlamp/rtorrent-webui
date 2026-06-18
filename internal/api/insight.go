@@ -48,11 +48,25 @@ func (s *Server) SetDirs(dirs []string)        { s.dirs = dirs }
 func (s *Server) SetHistory(h *history.Store)  { s.history = h }
 func (s *Server) SetSearch(r *search.Registry) { s.search = r }
 
+// SetDeleteWithData arms the optional on-disk data deletion path (off by default).
+func (s *Server) SetDeleteWithData(on bool) { s.deleteWithData = on }
+
+// SetDefaultDir registers the download default dir as an additional allowed
+// deletion root (joined with SetDirs).
+func (s *Server) SetDefaultDir(dir string) { s.defaultDir = dir }
+
+// SetBrowse arms the read-only directory browser (GET /api/fs). Pass true when
+// the transport is a unix socket (same-host daemon) or the operator set
+// downloads.browse. The endpoint and the /api/config flag additionally require a
+// resolvable root, so arming with no roots configured is a safe no-op.
+func (s *Server) SetBrowse(on bool) { s.browseAllowed = on }
+
 // metricKeys is the fixed gauge set the Insight dashboard charts.
 var metricKeys = []string{"cpu", "load1", "load5", "load15", "mem", "peers", "sess_down", "sess_up"}
 
 func (s *Server) insightRoutes() {
 	s.mux.HandleFunc("GET /api/diskspace", s.handleDiskspace)
+	s.mux.HandleFunc("GET /api/fs", s.handleFS)
 	s.mux.HandleFunc("GET /api/history", s.handleHistory)
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)
 	s.mux.HandleFunc("GET /api/search", s.handleSearch)

@@ -2,12 +2,18 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -220,6 +226,450 @@ func TestAddUploadCapConfigurable(t *testing.T) {
 			t.Errorf("status = %d, want 413 (body %s)", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// ── erase + optional on-disk data deletion ──────────────────────────────────
+
+// recDeleter is a fake FileDeleter: it records every path it is asked to delete
+// (so a test can assert the exact, resolved path) and returns a canned error,
+// without touching the real filesystem.
+type recDeleter struct {
+	mu     sync.Mutex
+	called []string
+	err    error
+}
+
+func (d *recDeleter) RemoveAll(_ context.Context, path string) error {
+	d.mu.Lock()
+	d.called = append(d.called, path)
+	d.mu.Unlock()
+	return d.err
+}
+
+func (d *recDeleter) paths() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.called...)
+}
+
+// eraseDataResp is a canned JSON-RPC reply whose string result is `path`. It
+// serves BOTH calls in the data-delete flow: d.base_path decodes the string;
+// d.erase (action) discards its result, so any valid success body works.
+func eraseDataResp(path string) string {
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "result": path})
+	return "Status: 200 OK\r\nContent-Type: application/json\r\n\r\n" + string(body)
+}
+
+func newRemoveServer(t *testing.T, scgiAddr string, roots []string, enabled bool, del FileDeleter) *Server {
+	t.Helper()
+	srv := newActionServer(t, scgiAddr)
+	srv.SetDirs(roots)
+	if enabled {
+		srv.SetDeleteWithData(true)
+	}
+	if del != nil {
+		srv.SetFileDeleter(del)
+	}
+	return srv
+}
+
+func deleteReq(t *testing.T, srv *Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, path, nil))
+	return rec
+}
+
+func eraseData(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var resp struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode data: %v (%q)", err, rec.Body.String())
+	}
+	return resp.Data
+}
+
+// Default DELETE (no ?data) erases the session entry only and reports that the
+// data was KEPT — the response must carry an explicit dataDeleted:false so the
+// UI can tell the user truthfully.
+func TestEraseKeepsDataByDefault(t *testing.T) {
+	fake := newFakeSCGI(t, loadOKResp) // result:0 — a real d.erase OK
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{"/data"}, true, del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	data := eraseData(t, rec)
+	if data["erased"] != true {
+		t.Errorf("erased = %v, want true", data["erased"])
+	}
+	if _, ok := data["dataDeleted"]; !ok {
+		t.Errorf("response is missing the dataDeleted field: %v", data)
+	}
+	if data["dataDeleted"] != false {
+		t.Errorf("dataDeleted = %v, want false", data["dataDeleted"])
+	}
+	if got := del.paths(); len(got) != 0 {
+		t.Errorf("deleter was called %v, want never", got)
+	}
+}
+
+// ?data=true is refused with 403 unless the operator opted in.
+func TestEraseDataDisabledByDefault(t *testing.T) {
+	fake := newFakeSCGI(t, loadOKResp)
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{"/data"}, false, del) // enabled=false
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errCode(t, rec); code != "data_delete_disabled" {
+		t.Errorf("code = %q, want data_delete_disabled", code)
+	}
+	if got := del.paths(); len(got) != 0 {
+		t.Errorf("deleter called %v despite disabled config", got)
+	}
+}
+
+// Even with the feature enabled, -mock mode must refuse data deletion (no real
+// daemon/disk to act on) rather than unlink something under the mock dirs.
+func TestEraseDataDisabledInMockMode(t *testing.T) {
+	fake := newFakeSCGI(t, loadOKResp)
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{"/data"}, true, del)
+	srv.SetMockMode(true)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errCode(t, rec); code != "data_delete_disabled" {
+		t.Errorf("code = %q, want data_delete_disabled", code)
+	}
+	if got := del.paths(); len(got) != 0 {
+		t.Errorf("deleter called %v in mock mode", got)
+	}
+}
+
+// The happy path: validate the daemon's base_path, resolve symlinks, erase, then
+// unlink exactly the resolved (real) path.
+func TestEraseWithDataValidatesAndDeletes(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "ubuntu")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantResolved, err := filepath.EvalSymlinks(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeSCGI(t, eraseDataResp(child))
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{root}, true, del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if data := eraseData(t, rec); data["dataDeleted"] != true {
+		t.Errorf("dataDeleted = %v, want true", data["dataDeleted"])
+	}
+	if got := del.paths(); len(got) != 1 || got[0] != wantResolved {
+		t.Errorf("deleted %v, want [%q]", got, wantResolved)
+	}
+}
+
+// The default download dir is an allowed deletion root too (not just the
+// explicit dirs list): a torrent stored only under default_dir must delete.
+func TestEraseWithDataDefaultDirIsARoot(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "season")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantResolved, err := filepath.EvalSymlinks(child)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeSCGI(t, eraseDataResp(child))
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newActionServer(t, fake.addr())
+	srv.SetDeleteWithData(true)
+	srv.SetDefaultDir(root) // root supplied ONLY via default_dir, with no SetDirs entry
+	srv.SetFileDeleter(del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if data := eraseData(t, rec); data["dataDeleted"] != true {
+		t.Errorf("dataDeleted = %v, want true", data["dataDeleted"])
+	}
+	if got := del.paths(); len(got) != 1 || got[0] != wantResolved {
+		t.Errorf("deleted %v, want [%q]", got, wantResolved)
+	}
+}
+
+// A contained-but-already-missing base path erases cleanly and reports nothing
+// deleted — never an error, never a deleter call.
+func TestEraseWithDataAlreadyGone(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "ghost") // never created on disk
+	fake := newFakeSCGI(t, eraseDataResp(child))
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{root}, true, del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if data := eraseData(t, rec); data["dataDeleted"] != false {
+		t.Errorf("dataDeleted = %v, want false", data["dataDeleted"])
+	}
+	if got := del.paths(); len(got) != 0 {
+		t.Errorf("deleter called %v for an already-gone path", got)
+	}
+}
+
+// A daemon path outside the configured roots is an integrity fault: refuse to
+// delete AND do not erase (502), never unlink.
+func TestEraseWithDataRejectsUntrustedPath(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeSCGI(t, eraseDataResp("/etc")) // outside root
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{root}, true, del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errCode(t, rec); code != "untrusted_base_path" {
+		t.Errorf("code = %q, want untrusted_base_path", code)
+	}
+	if got := del.paths(); len(got) != 0 {
+		t.Errorf("deleter called %v for an untrusted path", got)
+	}
+}
+
+// An empty base_path (magnet without metadata yet) means there is nothing on
+// disk: erase, report dataDeleted:false, never call the deleter.
+func TestEraseWithDataEmptyBasePath(t *testing.T) {
+	root := t.TempDir()
+	fake := newFakeSCGI(t, eraseDataResp(""))
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{root}, true, del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if data := eraseData(t, rec); data["dataDeleted"] != false {
+		t.Errorf("dataDeleted = %v, want false", data["dataDeleted"])
+	}
+	if got := del.paths(); len(got) != 0 {
+		t.Errorf("deleter called %v for an empty base_path", got)
+	}
+}
+
+// If the unlink fails after the erase commits, the torrent is gone but its files
+// may be orphaned: surface a 502 whose body names the resolved path for recovery.
+func TestEraseWithDataPartialFailure(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "movie")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantResolved, _ := filepath.EvalSymlinks(child)
+	fake := newFakeSCGI(t, eraseDataResp(child))
+	defer fake.close()
+	del := &recDeleter{err: fmt.Errorf("permission denied")}
+	srv := newRemoveServer(t, fake.addr(), []string{root}, true, del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errCode(t, rec); code != "data_delete_failed" {
+		t.Errorf("code = %q, want data_delete_failed", code)
+	}
+	if !strings.Contains(rec.Body.String(), wantResolved) {
+		t.Errorf("error body %q does not name the orphaned path %q", rec.Body.String(), wantResolved)
+	}
+}
+
+// A delete that exceeds the budget surfaces the same recoverable 502.
+func TestEraseWithDataDeleteTimeout(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "iso")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := newFakeSCGI(t, eraseDataResp(child))
+	defer fake.close()
+	del := &recDeleter{err: context.DeadlineExceeded}
+	srv := newRemoveServer(t, fake.addr(), []string{root}, true, del)
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errCode(t, rec); code != "data_delete_failed" {
+		t.Errorf("code = %q, want data_delete_failed", code)
+	}
+}
+
+// The safety story rests on reading base_path WHILE the torrent still exists —
+// i.e. d.base_path must precede d.erase. Pin that ordering.
+func TestEraseBasePathBeforeErase(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "show")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fake := newOrderedSCGI(t, eraseDataResp(child))
+	defer fake.close()
+	srv := newRemoveServer(t, fake.addr(), []string{root}, true, &recDeleter{})
+
+	if rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	methods := fake.methods(t)
+	want := []string{"d.base_path", "d.erase"}
+	if len(methods) != len(want) || methods[0] != want[0] || methods[1] != want[1] {
+		t.Fatalf("call order = %v, want %v", methods, want)
+	}
+}
+
+// The capability gate is stateless and per-request: concurrent ?data=true calls
+// against a server with the feature OFF are all rejected, none reach the deleter.
+func TestEraseBulkGateIsPerRequest(t *testing.T) {
+	fake := newFakeSCGI(t, loadOKResp)
+	defer fake.close()
+	del := &recDeleter{}
+	srv := newRemoveServer(t, fake.addr(), []string{"/data"}, false, del)
+
+	var wg sync.WaitGroup
+	codes := make([]int, 4)
+	for i := range codes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := deleteReq(t, srv, fmt.Sprintf("/api/torrents/H%d?data=true", i))
+			codes[i] = rec.Code
+		}(i)
+	}
+	wg.Wait()
+	for i, c := range codes {
+		if c != http.StatusForbidden {
+			t.Errorf("request %d status = %d, want 403", i, c)
+		}
+	}
+	if got := del.paths(); len(got) != 0 {
+		t.Errorf("deleter called %v under a disabled gate", got)
+	}
+}
+
+// A dial failure on the data-delete path maps to 503 (transient), like every
+// other action, not a hard 502.
+func TestEraseWithDataUnreachable(t *testing.T) {
+	cl := scgi.New("tcp://127.0.0.1:1", 4, 50*time.Millisecond, 200*time.Millisecond)
+	cl.SetConnectBudget(150 * time.Millisecond)
+	srv := New(sse.NewHub(), rpc.New(cl), "main")
+	srv.SetDeleteWithData(true)
+	srv.SetDirs([]string{"/data"})
+
+	rec := deleteReq(t, srv, "/api/torrents/ABCD?data=true")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (%s)", rec.Code, rec.Body.String())
+	}
+	if code := errCode(t, rec); code != "rtorrent_unreachable" {
+		t.Errorf("code = %q, want rtorrent_unreachable", code)
+	}
+}
+
+// osDeleter is the production FileDeleter; every handler test injects a fake, so
+// this is the only coverage that the real watchdog actually unlinks a tree and
+// reports success through its select.
+func TestOSDeleterRemovesRealTree(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "a", "b")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "f.bin"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "a")
+	if err := (osDeleter{}).RemoveAll(context.Background(), target); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("tree still present after RemoveAll: stat err = %v", err)
+	}
+}
+
+// orderedSCGI captures EVERY forwarded SCGI frame in arrival order (the shared
+// newFakeSCGI keeps only the first), so a test can assert call ordering. It
+// replies the same canned resp to every connection.
+type orderedSCGI struct {
+	ln   net.Listener
+	mu   sync.Mutex
+	raw  [][]byte
+	resp string
+}
+
+func newOrderedSCGI(t *testing.T, resp string) *orderedSCGI {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	f := &orderedSCGI{ln: ln, resp: resp}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				raw, _ := io.ReadAll(conn)
+				f.mu.Lock()
+				f.raw = append(f.raw, raw)
+				f.mu.Unlock()
+				_, _ = conn.Write([]byte(f.resp))
+			}()
+		}
+	}()
+	return f
+}
+
+func (f *orderedSCGI) addr() string { return "tcp://" + f.ln.Addr().String() }
+func (f *orderedSCGI) close()       { f.ln.Close() }
+
+func (f *orderedSCGI) methods(t *testing.T) []string {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ms := make([]string, 0, len(f.raw))
+	for _, raw := range f.raw {
+		m, _ := capturedCall(t, raw)
+		ms = append(ms, m)
+	}
+	return ms
 }
 
 // The 201 add-success response must say application/json; setting the header

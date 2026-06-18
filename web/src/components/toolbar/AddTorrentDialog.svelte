@@ -1,6 +1,8 @@
 <script lang="ts">
   import Modal from '../ui/Modal.svelte'
-  import { api } from '$lib/api/client'
+  import { api, type FsEntry } from '$lib/api/client'
+  import { config } from '$lib/stores/config.svelte'
+  import { splitDest, filterDirs, cleanSaveTo } from '$lib/dirCombo'
   import { toast } from 'svelte-sonner'
 
   let { open = $bindable(false) }: { open?: boolean } = $props()
@@ -45,18 +47,145 @@
     file = null
     dest = ''
     label = ''
+    queriedDir = null
+    srcEntries = []
+    closeList()
   }
+
+  // --- save-to directory combobox (live only when config.browse) -------------
+  // A free-text path input augmented, when the server can serve confined
+  // directory listings, with typeahead suggestions and one-level click drill-in.
+  // dest stays the single source of truth: drill-in/select mutates it directly,
+  // so what's shown is exactly what submits.
+  let destEl = $state<HTMLInputElement>()
+  let listOpen = $state(false)
+  let srcEntries = $state<FsEntry[]>([])
+  let queriedDir = $state<string | null>(null) // dir last listed (null = none yet)
+  let truncated = $state(false)
+  let active = $state(-1)
+  let popStyle = $state('')
+  let seq = 0
+  let ac: AbortController | null = null
+  let debounceT: ReturnType<typeof setTimeout> | undefined
+
+  // Client-side filter over the loaded entries — instant per keystroke, no
+  // network. The (capped) listing for the current dir is the candidate set.
+  // splitDest/filterDirs/cleanSaveTo are extracted to $lib/dirCombo (unit-tested).
+  const visible = $derived(filterDirs(srcEntries, splitDest(dest).leaf))
+
+  async function runQuery(dir: string) {
+    const my = ++seq // monotonic: drop any out-of-order earlier response
+    ac?.abort()
+    ac = new AbortController()
+    const res = await api.browse(dir || undefined, ac.signal)
+    if (my !== seq) return // superseded by a newer keystroke
+    queriedDir = dir
+    // Coerce away a null/absent list (defensive — the server emits []): a null
+    // here would make `visible.length` throw and freeze the dropdown.
+    srcEntries = (res ? (dir === '' ? res.roots : res.entries) : []) ?? []
+    truncated = res?.truncated ?? false
+    active = -1
+    listOpen = config.browse
+  }
+
+  function refresh() {
+    const { dir } = splitDest(dest)
+    if (dir === queriedDir) return // same dir already loaded; `visible` re-filters live
+    void runQuery(dir)
+  }
+  function onFocus() {
+    if (!config.browse) return
+    listOpen = true
+    refresh()
+  }
+  function onInput() {
+    if (!config.browse) return
+    listOpen = true
+    active = -1 // the filtered set changed; don't keep a stale highlight index
+    clearTimeout(debounceT)
+    debounceT = setTimeout(refresh, 140)
+  }
+  function choose(e: FsEntry) {
+    dest = e.path + '/' // trailing slash => next listing shows this dir's children
+    void runQuery(e.path)
+    destEl?.focus()
+  }
+  function closeList() {
+    listOpen = false
+    active = -1
+    ac?.abort()
+  }
+  function onComboKey(e: KeyboardEvent) {
+    if (!config.browse) return
+    if (e.key === 'Escape') {
+      if (listOpen) {
+        e.preventDefault()
+        e.stopPropagation() // close the dropdown only — don't let App.svelte blur the field
+        closeList()
+      }
+      return // closed: let it bubble (App blurs the input, as today)
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (listOpen && active >= 0 && visible[active]) choose(visible[active]) // commit highlighted
+      else void submit() // nothing highlighted -> submit the typed path verbatim
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!listOpen) return onFocus()
+      if (visible.length) active = (active + 1) % visible.length
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (listOpen && visible.length) active = active <= 0 ? visible.length - 1 : active - 1
+      return
+    }
+    if (e.key === 'Home' && listOpen && visible.length) {
+      e.preventDefault()
+      active = 0
+    } else if (e.key === 'End' && listOpen && visible.length) {
+      e.preventDefault()
+      active = visible.length - 1
+    }
+  }
+
+  // Fixed-position popover anchored to the input: the modal has overflow:hidden,
+  // so an absolutely-positioned dropdown from this near-bottom field would clip.
+  function positionPop() {
+    if (!destEl) return
+    const r = destEl.getBoundingClientRect()
+    popStyle = `top:${r.bottom + 4}px;left:${r.left}px;width:${r.width}px`
+  }
+  $effect(() => {
+    if (!listOpen) return
+    positionPop()
+    const on = () => positionPop()
+    window.addEventListener('resize', on)
+    window.addEventListener('scroll', on, true) // capture: reposition on any ancestor scroll
+    return () => {
+      window.removeEventListener('resize', on)
+      window.removeEventListener('scroll', on, true)
+    }
+  })
+  // Tear the dropdown down whenever the modal closes.
+  $effect(() => {
+    if (!open) closeList()
+  })
 
   async function submit() {
     if (!canSubmit || busy) return
     busy = true
+    // Drill-in leaves a trailing slash ("/data/dl/"); rtorrent wants the bare dir.
+    const saveTo = cleanSaveTo(dest)
     try {
       if (tab === 'file') {
-        if (file) await api.addFile(file, label || undefined, start, dest || undefined)
+        if (file) await api.addFile(file, label || undefined, start, saveTo)
         toast.success('Added 1 torrent')
       } else {
         const fn = tab === 'magnet' ? api.addMagnet : api.addURL
-        const res = await Promise.allSettled(lines(tab === 'magnet' ? magnet : url).map((l) => fn(l, label || undefined, start, dest || undefined)))
+        const res = await Promise.allSettled(lines(tab === 'magnet' ? magnet : url).map((l) => fn(l, label || undefined, start, saveTo)))
         const ok = res.filter((r) => r.status === 'fulfilled').length
         if (ok > 0) toast.success(`Added ${ok} torrent${ok > 1 ? 's' : ''}`)
       }
@@ -131,7 +260,41 @@
   <div class="add-opts">
     <label class="opt-row">
       <span class="w-[58px] text-[10px] uppercase tracking-[0.14em] text-dim">save to</span>
-      <input class="inp" bind:value={dest} placeholder="~/downloads (rtorrent default)" spellcheck="false" />
+      <div class="combo">
+        <input
+          bind:this={destEl}
+          class="inp"
+          bind:value={dest}
+          placeholder="~/downloads (rtorrent default)"
+          spellcheck="false"
+          autocomplete="off"
+          role={config.browse ? 'combobox' : undefined}
+          aria-expanded={config.browse ? listOpen : undefined}
+          aria-controls={config.browse ? 'dir-listbox' : undefined}
+          aria-autocomplete={config.browse ? 'list' : undefined}
+          aria-activedescendant={config.browse && listOpen && active >= 0 ? `dir-opt-${active}` : undefined}
+          onfocus={onFocus}
+          oninput={onInput}
+          onkeydown={onComboKey}
+          onblur={() => closeList()}
+        />
+        {#if config.browse && listOpen}
+          <!-- pointerdown preventDefault keeps the input focused (fires before blur), so a click selects without the dropdown vanishing first -->
+          <ul class="combo-pop" id="dir-listbox" role="listbox" aria-label="directories" style={popStyle} onpointerdown={(e) => e.preventDefault()}>
+            {#if visible.length === 0}
+              <li class="combo-empty">no matching folders</li>
+            {:else}
+              {#each visible as e, i (e.path)}
+                <!-- svelte-ignore a11y_click_events_have_key_events -- keyboard handling lives on the combobox input (aria-activedescendant); options are not individually focusable per the WAI-ARIA combobox pattern -->
+                <li id={`dir-opt-${i}`} role="option" aria-selected={i === active} class="combo-opt {i === active ? 'on' : ''}" onclick={() => choose(e)}>
+                  <span class="combo-ico">▸</span>{e.name}
+                </li>
+              {/each}
+              {#if truncated}<li class="combo-trunc">first {visible.length} shown · keep typing to narrow</li>{/if}
+            {/if}
+          </ul>
+        {/if}
+      </div>
     </label>
     <label class="opt-row">
       <span class="w-[58px] text-[10px] uppercase tracking-[0.14em] text-dim">label</span>

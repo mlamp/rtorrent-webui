@@ -1,5 +1,6 @@
 <script lang="ts">
   import { detail, type DetailTab } from '$lib/stores/detail.svelte'
+  import { removeDialog } from '$lib/stores/removeDialog.svelte'
   import type { TorrentRow } from '$lib/stores/torrents.svelte'
   import { api, silentGet } from '$lib/api/client'
   import { short, ratio, relativeTime } from '$lib/format'
@@ -166,18 +167,20 @@
     }
   }
 
-  async function act(a: 'pause' | 'resume' | 'recheck' | 'remove') {
+  async function act(a: 'pause' | 'resume' | 'recheck') {
     try {
       if (a === 'pause') await api.stop(t.hash)
       else if (a === 'resume') await api.start(t.hash)
       else if (a === 'recheck') await api.recheck(t.hash)
-      else if (a === 'remove') {
-        await api.remove(t.hash)
-        detail.close()
-      }
     } catch {
       /* toast shown */
     }
+  }
+
+  // Remove routes through the shared confirm dialog (warns, offers optional
+  // on-disk deletion); the detail modal closes only once the removal succeeds.
+  function remove() {
+    removeDialog.request([{ hash: t.hash, name: t.name }], () => detail.close())
   }
 </script>
 
@@ -197,7 +200,7 @@
       <div class="flex items-center gap-2">
         <button class="rd-btn" onclick={() => act(paused ? 'resume' : 'pause')}>{paused ? '▶ RESUME' : '⏸ PAUSE'}</button>
         <button class="rd-btn" onclick={() => act('recheck')}>⟳ RECHECK</button>
-        <button class="rd-btn danger" onclick={() => act('remove')}>✕ REMOVE</button>
+        <button class="rd-btn danger" onclick={remove}>✕ REMOVE</button>
       </div>
     </div>
 

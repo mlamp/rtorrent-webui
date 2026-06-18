@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/mlamp/rtorrent-webui/internal/config"
@@ -44,6 +45,21 @@ type Server struct {
 	history *history.Store
 	search  *search.Registry
 
+	// deleteWithData gates the optional on-disk data deletion of DELETE
+	// /api/torrents/{hash}?data=true. Off by default — the destructive path is
+	// only armed when the operator opts in (features.delete_with_data). defaultDir
+	// joins dirs as an additional allowed deletion root. deleter is the seam that
+	// actually unlinks files (swapped for a fake in tests).
+	deleteWithData bool
+	defaultDir     string
+	deleter        FileDeleter
+
+	// browseAllowed gates the read-only directory browser (GET /api/fs). It is the
+	// transport/override decision (unix socket OR downloads.browse); the endpoint
+	// and the /api/config flag additionally require >=1 root to resolve. See
+	// SetBrowse and handleFS.
+	browseAllowed bool
+
 	rpcPassthrough bool
 	rpcAllow       config.MethodSet
 	rpcDeny        config.MethodSet
@@ -57,10 +73,40 @@ func New(hub *sse.Hub, r *rpc.Client, view string) *Server {
 	if view == "" {
 		view = "main"
 	}
-	s := &Server{hub: hub, rpc: r, detail: r, view: view, maxUpload: maxUploadBytes, mux: http.NewServeMux()}
+	s := &Server{hub: hub, rpc: r, detail: r, view: view, maxUpload: maxUploadBytes, deleter: osDeleter{}, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
+
+// FileDeleter unlinks a download's on-disk data. It is a seam so tests can assert
+// the exact path handed to it (and simulate failure/timeout) without touching the
+// real filesystem. ctx bounds the wait — see osDeleter.
+type FileDeleter interface {
+	RemoveAll(ctx context.Context, path string) error
+}
+
+// osDeleter is the production deleter: os.RemoveAll bounded by a watchdog. We
+// deliberately reuse os.RemoveAll (which Lstats and so does NOT follow a symlink
+// found in the tree — a symlink pointing outside cannot redirect the delete)
+// rather than hand-rolling recursion, which is the single most dangerous line we
+// could write here. The watchdog gives the caller a wall-clock budget; note a
+// single in-flight unlink syscall on a hung mount is not interruptible, so the
+// budget bounds the WAIT, not a stuck syscall (fine for local disk).
+type osDeleter struct{}
+
+func (osDeleter) RemoveAll(ctx context.Context, path string) error {
+	done := make(chan error, 1)
+	go func() { done <- os.RemoveAll(path) }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err() // abandon the goroutine; the budget bounds our wait
+	}
+}
+
+// SetFileDeleter overrides the on-disk deleter (tests inject a recording fake).
+func (s *Server) SetFileDeleter(d FileDeleter) { s.deleter = d }
 
 // SetDetailRPC overrides the source for the detail tabs (files/peers/trackers/
 // pieces). Used by -mock mode so the detail view works without a live rtorrent.
@@ -163,11 +209,21 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{"webui": Version, "rtorrent": cv, "api": av})
 }
 
-// handleConfig serves static UI config (the instance name). Deliberately separate
-// from /api/version — that one dials rtorrent and can be slow or fail when the
-// daemon is down, but the branding name must always load promptly regardless.
+// handleConfig serves static UI config (instance name + capability flags).
+// Deliberately separate from /api/version — that one dials rtorrent and can be
+// slow or fail when the daemon is down, but branding/capabilities must always
+// load promptly regardless. deleteWithData tells the SPA whether to offer the
+// "delete files from disk" affordance at all.
 func (s *Server) handleConfig(w http.ResponseWriter, _ *http.Request) {
-	writeOK(w, map[string]any{"name": s.name})
+	writeOK(w, map[string]any{
+		"name":           s.name,
+		"deleteWithData": s.deleteWithData,
+		// browse tells the SPA whether to wire the save-to directory combobox. It
+		// is the AND of the transport/override gate and at least one resolvable
+		// root, so a capability-on server with no usable roots correctly reports
+		// false (the combobox stays a plain free-text input).
+		"browse": s.browseAllowed && len(s.resolvedRoots()) > 0,
+	})
 }
 
 func (s *Server) handleTorrents(w http.ResponseWriter, r *http.Request) {

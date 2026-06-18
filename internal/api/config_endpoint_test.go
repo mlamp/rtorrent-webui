@@ -34,3 +34,32 @@ func TestHandleConfigReturnsName(t *testing.T) {
 		t.Fatalf("got %+v, want ok=true name=TV", got)
 	}
 }
+
+// /api/config advertises whether on-disk data deletion is enabled, so the SPA
+// knows whether to render the "delete files" affordance. Default OFF.
+func TestHandleConfigAdvertisesDeleteWithData(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		on   bool
+	}{{"default off", false}, {"enabled", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := New(sse.NewHub(), nil, "main")
+			if tc.on {
+				srv.SetDeleteWithData(true)
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+			var got struct {
+				Data struct {
+					DeleteWithData bool `json:"deleteWithData"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Data.DeleteWithData != tc.on {
+				t.Fatalf("deleteWithData = %v, want %v", got.Data.DeleteWithData, tc.on)
+			}
+		})
+	}
+}

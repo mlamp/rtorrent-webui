@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -139,15 +141,117 @@ func (s *Server) handleAdd(w http.ResponseWriter, r *http.Request) {
 	writeOKStatus(w, http.StatusCreated, map[string]bool{"added": true})
 }
 
+// handleErase removes a torrent from the session and, when ?data=true is
+// requested AND on-disk deletion is enabled, also unlinks its data files.
+//
+// The destructive path is fail-closed and ordered carefully:
+//
+//	gate (config + not -mock) → read base_path (while the torrent still exists)
+//	→ lexical containment → symlink-resolved re-containment → erase → unlink.
+//
+// base_path comes from the DAEMON, so a path that escapes the configured roots
+// is treated as an integrity fault (502), never deleted. The response always
+// carries both {erased, dataDeleted} so the UI can report truthfully.
 func (s *Server) handleErase(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx(r)
 	defer cancel()
-	// NOTE: data deletion (?data=true) is gated behind config; wired in M6.
-	if err := s.rpc.Erase(ctx, r.PathValue("hash")); err != nil {
+	hash := r.PathValue("hash")
+	dataReq := r.URL.Query().Get("data") == "true"
+
+	// Common path: erase only, data left on disk.
+	if !dataReq {
+		s.eraseNoData(ctx, w, hash)
+		return
+	}
+
+	// Data deletion is gated: operator opt-in, and never in -mock mode (no real
+	// daemon/disk to act on).
+	if s.mock || !s.deleteWithData {
+		writeErr(w, http.StatusForbidden, "data_delete_disabled",
+			"on-disk data deletion is not enabled on this server")
+		return
+	}
+
+	// Resolve the on-disk path while the torrent still exists, then prove it is
+	// contained in an allowed root before touching anything.
+	base, err := s.rpc.BasePath(ctx, hash)
+	if err != nil {
 		writeRPCErr(w, err)
 		return
 	}
-	writeOK(w, map[string]bool{"erased": true})
+	clean, err := validateBasePath(base, s.deleteRoots())
+	if err != nil {
+		if errors.Is(err, errEmptyBasePath) {
+			s.eraseNoData(ctx, w, hash) // no data on disk yet (e.g. magnet w/o metadata)
+			return
+		}
+		writeErr(w, http.StatusBadGateway, "untrusted_base_path",
+			"the daemon reported a data path outside the configured download roots; refusing to delete")
+		return
+	}
+	resolved, err := resolveAndRevalidate(clean, s.deleteRoots())
+	if err != nil {
+		if errors.Is(err, errBasePathGone) {
+			s.eraseNoData(ctx, w, hash) // already gone on disk
+			return
+		}
+		writeErr(w, http.StatusBadGateway, "untrusted_base_path",
+			"the daemon data path could not be safely resolved inside the download roots; refusing to delete")
+		return
+	}
+
+	// Erase first (the point of no return for the session), then unlink. A
+	// DETACHED budget so a client disconnect after the erase commits cannot abort
+	// a delete the user committed to.
+	if err := s.rpc.Erase(ctx, hash); err != nil {
+		writeRPCErr(w, err)
+		return
+	}
+	delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer delCancel()
+	if err := s.deleter.RemoveAll(delCtx, resolved); err != nil {
+		// The torrent is gone but its files may be partially deleted. Record the
+		// orphaned path server-side (it survives a dismissed toast) and name it in
+		// the error so the user can finish the cleanup by hand.
+		slog.Error("orphaned files after erase", "hash", hash, "path", resolved, "err", err)
+		writeErr(w, http.StatusBadGateway, "data_delete_failed",
+			fmt.Sprintf("torrent removed, but its files may be partially deleted: %s: %v", resolved, err))
+		return
+	}
+	writeOK(w, eraseResult(true, true))
+}
+
+// eraseNoData erases the session entry and reports that no data was deleted.
+func (s *Server) eraseNoData(ctx context.Context, w http.ResponseWriter, hash string) {
+	if err := s.rpc.Erase(ctx, hash); err != nil {
+		writeRPCErr(w, err)
+		return
+	}
+	writeOK(w, eraseResult(true, false))
+}
+
+func eraseResult(erased, dataDeleted bool) map[string]bool {
+	return map[string]bool{"erased": erased, "dataDeleted": dataDeleted}
+}
+
+// deleteRoots is the set of directories within which on-disk deletion is allowed:
+// the configured download dirs plus the default dir.
+func (s *Server) deleteRoots() []string {
+	roots := append([]string(nil), s.dirs...)
+	if s.defaultDir != "" {
+		roots = append(roots, s.defaultDir)
+	}
+	return roots
+}
+
+// resolvedRoots is the EvalSymlinks-resolved, de-duplicated set of download roots
+// the read-only browser (GET /api/fs) is confined to — the delete roots,
+// normalized and with unresolvable entries dropped. It is the single source of
+// truth for both the empty-path "top level" listing and the /api/config browse
+// capability flag. Empty when none resolve (capability then off). Touches the
+// filesystem (EvalSymlinks) per call.
+func (s *Server) resolvedRoots() []string {
+	return resolveRoots(s.deleteRoots())
 }
 
 func (s *Server) handleLabel(w http.ResponseWriter, r *http.Request) {
