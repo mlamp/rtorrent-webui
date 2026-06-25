@@ -45,7 +45,7 @@ func (s *Server) EnableRPCProxy(path string) string {
 // reservedProxyPath reports whether path collides with a route the unfiltered
 // proxy must never occupy: the auth-exempt health check, or the JSON API surface.
 func reservedProxyPath(path string) bool {
-	return path == "/healthz" || strings.HasPrefix(path, "/api/")
+	return path == "/healthz" || path == "/api" || strings.HasPrefix(path, "/api/")
 }
 
 func (s *Server) handleRPCProxy(w http.ResponseWriter, r *http.Request) {

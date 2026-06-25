@@ -18,6 +18,12 @@ web/*.tsbuildinfo
 *.log
 /data/
 
+# belt-and-suspenders: never commit live databases or GeoIP data, wherever they sit
+*.db
+*.db-wal
+*.db-shm
+*.mmdb
+
 # Go coverage artifacts (coverage/history.csv stays tracked)
 coverage/coverage.out
 coverage/coverage.html

@@ -2,6 +2,9 @@
 
 # 0) GeoIP: DB-IP Lite Country (CC BY 4.0, no license key) — bundled so peer
 #    country flags work out of the box. Bump DBIP_DATE to refresh.
+#    NOTE: DB-IP purges old monthly files, so rebuilding an *older* image tag can
+#    404 once its DBIP_DATE rolls off. For a reproducible old-tag rebuild, pass a
+#    still-available DBIP_DATE, or vendor the .mmdb and COPY it instead of curling.
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS geoip
 ARG DBIP_DATE=2026-06
 RUN apk add --no-cache curl \
@@ -17,6 +20,8 @@ COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm run build   # -> /app/web/dist
+# Stage the bundled font's OFL-1.1 text at a stable path (node_modules/@fontsource is a pnpm symlink).
+RUN cp "$(readlink -f node_modules/@fontsource/jetbrains-mono/LICENSE)" /OFL-1.1.txt
 
 # 2) Build the Go binary with the SPA embedded (native host, cross-compiled)
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
@@ -33,10 +38,15 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
 
 # 3) Minimal runtime
 FROM gcr.io/distroless/static-debian12:nonroot
+LABEL org.opencontainers.image.source="https://github.com/mlamp/rtorrent-webui" \
+      org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/rtorrent-webui /usr/local/bin/rtorrent-webui
 COPY --from=geoip /dbip-country-lite.mmdb /usr/share/GeoIP/dbip-country-lite.mmdb
 COPY config.example.toml /etc/rtorrent-webui/config.toml
+# License + attribution compliance (Apache-2.0 + bundled deps incl. JetBrains Mono OFL-1.1, DB-IP CC BY 4.0).
 COPY NOTICE /NOTICE
+COPY LICENSE NOTICE THIRD-PARTY-LICENSES.md /usr/share/licenses/rtorrent-webui/
+COPY --from=web /OFL-1.1.txt /usr/share/licenses/OFL-1.1.txt
 EXPOSE 8080
 USER nonroot
 ENTRYPOINT ["/usr/local/bin/rtorrent-webui", "-config", "/etc/rtorrent-webui/config.toml"]

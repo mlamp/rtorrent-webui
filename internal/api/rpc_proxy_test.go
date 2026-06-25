@@ -204,13 +204,13 @@ func TestEnableRPCProxyPathFallback(t *testing.T) {
 	// a trailing slash would make ServeMux 307-redirect the canonical path. Each
 	// call needs a fresh mux — registering the same pattern twice panics.
 	fallback := []string{
-		"",          // empty
-		"/",         // root collides with the SPA catch-all
-		"RPC2",      // not rooted
-		"/RPC2/",    // trailing slash -> subtree pattern
-		"/RPC2///",  // multiple trailing slashes
-		"/healthz",  // auth-exempt path -> would be an auth bypass
-		"/api/rpc",  // shadows the JSON passthrough
+		"",         // empty
+		"/",        // root collides with the SPA catch-all
+		"RPC2",     // not rooted
+		"/RPC2/",   // trailing slash -> subtree pattern
+		"/RPC2///", // multiple trailing slashes
+		"/healthz", // auth-exempt path -> would be an auth bypass
+		"/api/rpc", // shadows the JSON passthrough
 		"/api/torrents",
 	}
 	for _, in := range fallback {

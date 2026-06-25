@@ -25,8 +25,8 @@ type Torrent struct {
 	// rtorrent's resume data). Unlike Completed it does NOT collapse during a hash-check,
 	// so it's the source for the history download-rate series. Internal only (the wire
 	// uses Completed for progress; graphs come from /api/history), so json:"-".
-	DownTotal int64  `json:"-"`
-	DownRate  int64  `json:"downRate"`
+	DownTotal      int64  `json:"-"`
+	DownRate       int64  `json:"downRate"`
 	UpRate         int64  `json:"upRate"`
 	UpTotal        int64  `json:"upTotal"`
 	Ratio          int64  `json:"ratio"` // permille (rtorrent ratio*1000)

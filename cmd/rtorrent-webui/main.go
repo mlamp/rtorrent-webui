@@ -5,11 +5,14 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/mlamp/rtorrent-webui/internal/api"
 	"github.com/mlamp/rtorrent-webui/internal/config"
@@ -38,7 +41,19 @@ func main() {
 	diskDirs := flag.String("disk-dirs", "", "override downloads.dirs (comma-separated)")
 	mock := flag.Int("mock", 0, "serve N synthetic torrents instead of rtorrent (load testing)")
 	rebuildHistory := flag.Bool("rebuild-history", false, "reconstruct the global '' history series from the per-torrent series, then exit (one-time data hatch)")
+	genhash := flag.String("genhash", "", "print a bcrypt hash for the given password (for auth.users password_hash) and exit")
 	flag.Parse()
+
+	// Self-contained credential helper: `docker run --rm <image> -genhash '<pw>'`
+	// works against the bundled binary — no separate genhash tool to build.
+	if *genhash != "" {
+		h, err := bcrypt.GenerateFromPassword([]byte(*genhash), 12)
+		if err != nil {
+			logger.Fatal(err)
+		}
+		fmt.Println(string(h))
+		return
+	}
 
 	cfg := config.Default()
 	if *configPath != "" {
@@ -173,10 +188,29 @@ func main() {
 		}
 		handler = api.BasicAuth(cfg.Auth.Realm, creds.Verify, handler)
 		logger.Printf("auth: basic")
+	} else {
+		logger.Printf("WARNING: auth.mode=%q — the UI and the rtorrent control API (and the root-equivalent /RPC2 proxy, if enabled) are OPEN to anyone who can reach %s. Publish the port on 127.0.0.1 only, front it with an authenticating reverse proxy, or set auth.mode=basic.", cfg.Auth.Mode, cfg.Server.Listen)
+	}
+	// CSRF (same-origin) protection is always on; the Host allowlist (DNS-rebinding
+	// defense) is enforced only when server.allowed_hosts is set. Applied outermost
+	// so it runs before auth (browsers replay basic-auth creds on CSRF requests).
+	handler = api.SameOriginGuard(cfg.Server.AllowedHosts, handler)
+	if len(cfg.Server.AllowedHosts) > 0 {
+		logger.Printf("host allowlist: %v", cfg.Server.AllowedHosts)
 	}
 
 	logger.Printf("rtorrent-webui listening on %s (rtorrent %s, poll %s)", cfg.Server.Listen, cfg.Rtorrent.Socket, cfg.Rtorrent.PollInterval.D())
-	if err := http.ListenAndServe(cfg.Server.Listen, handler); err != nil {
+	// Timeouts bound slow-client (slowloris) attacks. WriteTimeout stays 0: the SSE
+	// stream (/api/events) is long-lived. ReadHeaderTimeout caps header read; the
+	// generous ReadTimeout still allows a multipart .torrent upload to stream in.
+	server := &http.Server{
+		Addr:              cfg.Server.Listen,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
 		logger.Fatal(err)
 	}
 }

@@ -1,11 +1,21 @@
 # rtorrent-webui
 
+[![CI](https://github.com/mlamp/rtorrent-webui/actions/workflows/ci.yml/badge.svg)](https://github.com/mlamp/rtorrent-webui/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-rtorrent--webui-1f6feb?logo=docker&logoColor=white)](https://github.com/mlamp/rtorrent-webui/pkgs/container/rtorrent-webui)
+
 A modern, fast web UI for rtorrent — a single **Go** binary that embeds a
 **Svelte 5** SPA, talks **JSON-RPC over rtorrent's SCGI socket**, and streams live
 state to the browser over **SSE** from one shared poll loop. A drop-in **sidecar**
 replacement for the heavy nginx + PHP + ruTorrent stack.
 
+> **Why this over ruTorrent / Flood?** One ~13 MB distroless binary (no PHP, no nginx),
+> a built-in `/RPC2` proxy so *arr clients need no `scgi_pass` shim, live SSE updates that
+> stay smooth at 1000+ torrents, GeoIP peer flags, and persisted traffic history.
+
 Image: **`ghcr.io/mlamp/rtorrent-webui:latest`**
+
+![rtorrent-webui — TorUI](docs/img/hero.png)
 
 ## Features
 
@@ -21,12 +31,12 @@ Image: **`ghcr.io/mlamp/rtorrent-webui:latest`**
 ## Requirements
 
 - An **rtorrent** instance exposing an **SCGI** endpoint:
-  - unix socket (recommended): `network.scgi.open_local = /var/run/rtorrent/scgi.socket`, **or**
+  - unix socket (recommended): `network.scgi.open_local = /run/rtorrent/scgi.socket`, **or**
   - TCP: `network.scgi.open_port = 127.0.0.1:5000`
 - rtorrent **≥ 0.16.13** (the SCGI EPIPE busy-loop fix landed there, so a large
   `d.multicall` over many torrents can't peg the SCGI thread). Easiest: the matching
-  clean daemon image **`ghcr.io/mlamp/rtorrent`** (distroless, built here in
-  [`../rtorrentd`](../rtorrentd)). The interim drop-in
+  clean daemon image **`ghcr.io/mlamp/rtorrent`** (distroless, built in
+  [mlamp/rtorrent-stack](https://github.com/mlamp/rtorrent-stack)). The interim drop-in
   `ghcr.io/mlamp/rtorrent-rutorrent:0.16.10-scgifix` (patched binary on the full crazymax
   stack) also works.
 - Docker (for the container) — that's it. The UI speaks JSON-RPC natively; no nginx
@@ -37,14 +47,12 @@ Image: **`ghcr.io/mlamp/rtorrent-webui:latest`**
 ### A. Sidecar next to rtorrent (recommended)
 
 ```bash
-# pull
-docker login ghcr.io -u <you> --password-stdin   # token with read:packages
-docker pull ghcr.io/mlamp/rtorrent-webui:latest
+docker pull ghcr.io/mlamp/rtorrent-webui:latest   # public image, no login needed
 ```
 
 Use [`docker-compose.example.yml`](docker-compose.example.yml): both containers
 share a `rtorrent-socket` volume; rtorrent must open
-`network.scgi.open_local = /var/run/rtorrent/scgi.socket`. Then:
+`network.scgi.open_local = /run/rtorrent/scgi.socket`. Then:
 
 ```bash
 docker compose up -d
@@ -57,12 +65,19 @@ docker compose up -d
 ### B. Standalone against an existing rtorrent (TCP SCGI)
 
 ```bash
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/mlamp/rtorrent-webui:latest \
-  -rtorrent 192.168.1.10:5000
+  -rtorrent rtorrent.example:5000
 ```
 
 (Flags override the baked config — handy for a quick try.)
+
+> **Exposing it safely.** The default config ships `auth.mode = "none"`, so anyone who can
+> reach the port has full control of rtorrent (and the optional `/RPC2` proxy is
+> root-equivalent). Publish on **loopback** (`-p 127.0.0.1:8080:8080`), front it with an
+> authenticating reverse proxy, or set `auth.mode = "basic"` before binding to all
+> interfaces. Same-origin CSRF protection is always on; set `server.allowed_hosts` for
+> DNS-rebinding protection when exposing beyond loopback without a proxy.
 
 ## Configuration
 
@@ -85,8 +100,9 @@ it, or override individual settings with flags. See
 ### Auth
 
 ```bash
-# generate a bcrypt hash for a password:
-docker run --rm --entrypoint /usr/local/bin/rtorrent-webui ... # (or build genhash)
+# generate a bcrypt hash for a password (uses the bundled binary):
+docker run --rm ghcr.io/mlamp/rtorrent-webui:latest -genhash 'your-password'
+# (locally during development: `go run ./cmd/genhash 'your-password'`)
 ```
 
 In `config.toml`:
@@ -158,3 +174,9 @@ sh dev/up.sh          # throwaway rtorrent (TCP SCGI :5000) for local testing
 ```
 
 Build the image: `docker build -t rtorrent-webui .`
+
+## License
+
+[Apache-2.0](LICENSE). Bundled third-party components (incl. JetBrains Mono under the SIL
+Open Font License 1.1) are listed in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md); the
+DB-IP GeoIP data notice is in [NOTICE](NOTICE).

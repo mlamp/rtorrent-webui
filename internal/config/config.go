@@ -33,6 +33,10 @@ type Config struct {
 type Server struct {
 	Listen string `toml:"listen"`
 	Name   string `toml:"name"` // optional instance label shown in the browser tab title + on-screen brand
+	// AllowedHosts, when non-empty, restricts which Host header values are accepted
+	// (a DNS-rebinding defense). Empty = accept any Host. Values may be "host" or
+	// "host:port". Same-origin CSRF protection is always on regardless of this.
+	AllowedHosts []string `toml:"allowed_hosts"`
 }
 
 type Rtorrent struct {
@@ -135,7 +139,7 @@ func defaultRPCDenylist() []string {
 func Default() Config {
 	return Config{
 		Server:   Server{Listen: ":8080"},
-		Rtorrent: Rtorrent{Socket: "/var/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), IdleInterval: Duration(30 * time.Second), MaxInflight: 8, MaxUploadMB: 12, RPCTimeout: Duration(60 * time.Second)},
+		Rtorrent: Rtorrent{Socket: "/run/rtorrent/scgi.socket", View: "main", PollInterval: Duration(time.Second), IdleInterval: Duration(30 * time.Second), MaxInflight: 8, MaxUploadMB: 12, RPCTimeout: Duration(60 * time.Second)},
 		Auth:     Auth{Mode: "none", Realm: "rtorrent-webui"},
 		Insight:  Insight{GeoIPDB: "/usr/share/GeoIP/dbip-country-lite.mmdb"},
 		Features: Features{RPCDenylist: defaultRPCDenylist(), RPCProxyPath: "/RPC2"},

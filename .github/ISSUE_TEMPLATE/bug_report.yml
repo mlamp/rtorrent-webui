@@ -1,0 +1,38 @@
+name: Bug report
+description: Something isn't working
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what actually happened.
+    validations:
+      required: true
+  - type: input
+    id: webui-version
+    attributes:
+      label: rtorrent-webui version
+      description: From `/api/version`, the image tag, or the footer.
+      placeholder: "2026.06.x"
+    validations:
+      required: true
+  - type: input
+    id: rtorrent-version
+    attributes:
+      label: rtorrent / libtorrent version
+      placeholder: "0.16.13"
+    validations:
+      required: true
+  - type: textarea
+    id: deploy
+    attributes:
+      label: How you run it
+      description: docker run / compose snippet and relevant config.toml (REDACT secrets).
+      render: yaml
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / console errors
+      description: Container logs and any browser console errors.
+      render: shell

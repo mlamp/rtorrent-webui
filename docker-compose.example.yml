@@ -21,7 +21,10 @@ services:
     depends_on: [rtorrent]
     command: ["-rtorrent", "/run/rtorrent/scgi.socket"]   # point at the shared socket
     ports:
-      - "8080:8080"
+      # Published on loopback only: the default config ships auth.mode=none, so anyone who
+      # can reach the port has full control. Use 127.0.0.1, or front with a reverse proxy,
+      # or enable auth.mode=basic before binding to 0.0.0.0 ("8080:8080").
+      - "127.0.0.1:8080:8080"
     # To let Sonarr/Radarr/… drive rtorrent through this container instead of a separate
     # nginx scgi_pass shim, set features.rpc_proxy = true in config.toml and point the
     # *arr clients at http://webui:8080/RPC2 (path "/RPC2").

@@ -1,13 +1,19 @@
 # rtorrent-webui configuration
 
 [server]
-listen = "0.0.0.0:8080"            # HTTP bind for the web UI + API
+listen = "0.0.0.0:8080"            # HTTP bind INSIDE the container (keep 0.0.0.0 so `-p` works).
+                                   # Expose it safely from the HOST: publish on loopback
+                                   # (`-p 127.0.0.1:8080:8080`) or front it with a reverse proxy.
 # name = "TV"                       # optional instance label. Set it to brand the browser
                                    # tab ("TV · TorUI") and the on-screen mark ("▚ TV ::TorUI").
                                    # Empty keeps the default "TorUI · rtorrent" / "▚ TORUI ::rtorrent".
+# allowed_hosts = ["tv.example.com"]  # DNS-rebinding defense: if set, only these Host headers
+                                   # are accepted (empty = any). Recommended when exposing the
+                                   # port beyond loopback without an auth proxy. CSRF (same-origin)
+                                   # protection is always on regardless.
 
 [rtorrent]
-socket            = "/var/run/rtorrent/scgi.socket"  # SCGI unix socket (or host:port)
+socket            = "/run/rtorrent/scgi.socket"  # SCGI unix socket (or host:port)
 view              = "main"         # rtorrent view to poll
 poll_interval     = "1s"           # LIVE cadence while a browser is watching -> SSE delta rate
 idle_poll_interval = "30s"         # background cadence with no client open (history still recorded;
@@ -20,6 +26,9 @@ rpc_timeout       = "60s"          # whole-request deadline (nginx scgi_read_tim
 max_upload_mb = 12                 # reject .torrent uploads larger than this
 
 [auth]
+# DANGER: mode="none" leaves the UI + the rtorrent control API open to ANYONE who can
+# reach the port (and the /RPC2 proxy, if enabled, is root-equivalent). Only use "none"
+# when the port is bound to loopback or behind an authenticating reverse proxy.
 mode  = "none"                     # "none" (trust a fronting reverse proxy) | "basic"
 realm = "rtorrent-webui"
 # htpasswd_file = "/config/htpasswd"   # apache htpasswd (bcrypt) — takes precedence
@@ -42,8 +51,13 @@ search_enabled    = false          # tracker-search seam (no adapters in v1)
 
 [features]
 rpc_passthrough = false            # enable POST /api/rpc (JSON, allow/deny filtered)
-rpc_allowlist   = []               # if non-empty, only these methods are callable
-rpc_denylist    = ["execute.throw", "execute.capture", "execute.nothrow", "system.shutdown"]
+rpc_allowlist   = []               # if non-empty, ONLY these methods are callable (deny-by-default;
+                                   # the safe choice for any untrusted exposure)
+# A comprehensive RCE-equivalent baseline (execute*, load*, *.multicall, method.insert*,
+# control-flow, log/file writers, system.shutdown*, …) is ALWAYS enforced and cannot be
+# removed; entries here only ADD to it. A denylist can't make the passthrough safe against
+# an untrusted caller — prefer rpc_allowlist for that.
+rpc_denylist    = []
 
 # Raw XML-RPC proxy: a byte-pipe to rtorrent's SCGI, the same thing nginx's
 # `scgi_pass` does. Turn this on and point *arr (Sonarr/Radarr/Lidarr/…) at

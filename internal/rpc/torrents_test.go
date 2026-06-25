@@ -156,14 +156,14 @@ func TestDecodeTorrentsChunks(t *testing.T) {
 	for i := range row {
 		row[i] = 0
 	}
-	row[0] = "ABC"   // hash
-	row[1] = "name"  // name
-	row[2] = 1048576 // size
-	row[3] = 524288  // completed
-	row[20] = 16          // size_chunks
-	row[21] = 8           // completed_chunks
-	row[22] = 65536       // chunk_size
-	row[23] = 9876543210  // down.total (cumulative downloaded)
+	row[0] = "ABC"       // hash
+	row[1] = "name"      // name
+	row[2] = 1048576     // size
+	row[3] = 524288      // completed
+	row[20] = 16         // size_chunks
+	row[21] = 8          // completed_chunks
+	row[22] = 65536      // chunk_size
+	row[23] = 9876543210 // down.total (cumulative downloaded)
 	b, _ := json.Marshal([][]any{row})
 
 	got, err := decodeTorrents(b)
