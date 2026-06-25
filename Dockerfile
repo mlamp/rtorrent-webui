@@ -5,7 +5,7 @@
 #    NOTE: DB-IP purges old monthly files, so rebuilding an *older* image tag can
 #    404 once its DBIP_DATE rolls off. For a reproducible old-tag rebuild, pass a
 #    still-available DBIP_DATE, or vendor the .mmdb and COPY it instead of curling.
-FROM --platform=$BUILDPLATFORM alpine:3.22 AS geoip
+FROM --platform=$BUILDPLATFORM alpine:3.24 AS geoip
 ARG DBIP_DATE=2026-06
 RUN apk add --no-cache curl \
  && curl -fSL "https://download.db-ip.com/free/dbip-country-lite-${DBIP_DATE}.mmdb.gz" -o /tmp/db.gz \
