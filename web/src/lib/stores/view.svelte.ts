@@ -2,7 +2,7 @@ import type { Status } from '$lib/types/torrent'
 import { trackerHost } from '$lib/format'
 import type { TorrentRow } from './torrents.svelte'
 
-export type StatusFilter = 'all' | 'active' | 'downloading' | 'seeding' | 'stopped' | 'error'
+export type StatusFilter = 'all' | 'active' | 'downloading' | 'seeding' | 'hashing' | 'stopped' | 'error'
 export type ViewMode = 'list' | 'insight'
 export type ColumnKey =
   | 'name'
@@ -24,7 +24,7 @@ export type ColumnKey =
 // persisted. localStorage only; nothing server-side.
 const STORE_KEY = 'rtwebui.view.v1'
 const MODES: readonly ViewMode[] = ['list', 'insight']
-const STATUSES: readonly StatusFilter[] = ['all', 'active', 'downloading', 'seeding', 'stopped', 'error']
+const STATUSES: readonly StatusFilter[] = ['all', 'active', 'downloading', 'seeding', 'hashing', 'stopped', 'error']
 const SORT_KEYS: readonly ColumnKey[] = ['name', 'size', 'done', 'downRate', 'upRate', 'rate', 'eta', 'ratio', 'status', 'label', 'added']
 
 function loadPrefs(): Record<string, unknown> {
@@ -87,6 +87,7 @@ const statusMatch: Record<StatusFilter, (s: Status) => boolean> = {
   active: () => true, // handled by rate, see matches()
   downloading: (s) => s === 'downloading',
   seeding: (s) => s === 'seeding',
+  hashing: (s) => s === 'hashing',
   stopped: (s) => s === 'stopped' || s === 'paused',
   error: (s) => s === 'error',
 }

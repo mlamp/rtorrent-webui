@@ -116,11 +116,12 @@
   const trackerBase = $derived(all.filter((t) => matchesExcept(t, view, 'tracker')))
 
   const counts = $derived.by(() => {
-    const c = { all: statusBase.length, active: 0, downloading: 0, seeding: 0, stopped: 0, error: 0 }
+    const c = { all: statusBase.length, active: 0, downloading: 0, seeding: 0, hashing: 0, stopped: 0, error: 0 }
     for (const t of statusBase) {
       if (isActive(t)) c.active++
       if (t.status === 'downloading') c.downloading++
       else if (t.status === 'seeding') c.seeding++
+      else if (t.status === 'hashing') c.hashing++
       else if (t.status === 'stopped' || t.status === 'paused') c.stopped++
       else if (t.status === 'error') c.error++
     }
@@ -149,6 +150,7 @@
     { key: 'active', label: 'ACTIVE', mark: '⇅', count: () => counts.active },
     { key: 'downloading', label: 'DOWNLOADING', mark: '▶', count: () => counts.downloading },
     { key: 'seeding', label: 'SEEDING', mark: '↑', count: () => counts.seeding },
+    { key: 'hashing', label: 'CHECKING', mark: '⟳', count: () => counts.hashing },
     { key: 'stopped', label: 'STOPPED', mark: '■', count: () => counts.stopped },
     { key: 'error', label: 'ERROR', mark: '!', count: () => counts.error },
   ]

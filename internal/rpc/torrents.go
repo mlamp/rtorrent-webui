@@ -39,6 +39,7 @@ var torrentFields = []string{
 	"d.completed_chunks=",    // 21
 	"d.chunk_size=",          // 22
 	"d.down.total=",          // 23 (cumulative downloaded; monotonic through hash-checks)
+	"d.hashing=",             // 24 (hash-check enum: 0 none, non-zero = pending/running)
 }
 
 // Poll fetches the full torrent list for a view plus global stats in ONE batched
@@ -259,21 +260,34 @@ func decodeTorrents(raw json.RawMessage) ([]model.Torrent, error) {
 		}
 		t.PeersTotal = t.PeersConnected + asIntRaw(r[16])
 		t.SeedsTotal = t.SeedsConnected
-		t.Status = deriveStatus(asIntRaw(r[8]), asIntRaw(r[9]), asIntRaw(r[10]), asIntRaw(r[11]), left, t.Message)
+		t.Status = deriveStatus(asIntRaw(r[8]), asIntRaw(r[9]), asIntRaw(r[10]), asIntRaw(r[11]), asIntRaw(r[24]), left, t.Message)
 		out = append(out, t)
 	}
 	return out, nil
 }
 
-func deriveStatus(state, isActive, isOpen, isHashChecking, left int64, message string) model.Status {
+// deriveStatus maps rtorrent's raw download flags to a UI status. Precedence
+// matters; the cases are ordered most- to least-authoritative.
+//
+//   - hashing comes first: a hash-check pins the files closed and inactive, so any
+//     later rule keyed on is_open/is_active would mislabel it. d.hashing is the
+//     reliable signal (non-zero = queued OR running); d.is_hash_checking is 1 only
+//     while a check is ACTIVELY running and stays 0 for the queued-but-not-started
+//     torrents that sit in rtorrent's hash-check queue — checking only the latter
+//     reported the whole queue as "stopped".
+//   - "stopped" is d.state == 0 (the user's stop intent), NOT is_open == 0. A
+//     closed-but-started torrent is paused/queued, not stopped: rtorrent keeps
+//     d.state == 1 across a pause (d.stop;d.close) and across the hash-check queue,
+//     so folding is_open == 0 into "stopped" hid those as stopped too.
+func deriveStatus(state, isActive, isOpen, isHashChecking, hashing, left int64, message string) model.Status {
 	switch {
-	case isHashChecking != 0:
+	case isHashChecking != 0 || hashing != 0:
 		return model.StatusHashing
-	case state == 0 || isOpen == 0:
+	case state == 0:
 		return model.StatusStopped
 	case message != "" && !isTrackerWarning(message):
 		return model.StatusError
-	case isActive == 0:
+	case isActive == 0 || isOpen == 0:
 		return model.StatusPaused
 	case left == 0:
 		return model.StatusSeeding
