@@ -30,7 +30,7 @@ func (s *Subscriber) kill() { s.once.Do(func() { close(s.closed) }) }
 // Hub fans messages out to subscribers and remembers the latest snapshot so a
 // new subscriber gets full state immediately.
 type Hub struct {
-	mu         sync.RWMutex
+	mu           sync.RWMutex
 	subs         map[*Subscriber]struct{}
 	latestSnap   *Message
 	latestStatus *Message // cached health (event: status) for new joiners
