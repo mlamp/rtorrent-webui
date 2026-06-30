@@ -12,7 +12,7 @@ jobs:
   go:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v2
       - run: mise run web-install
       - run: mise run web-build # web/dist must exist before go:embed compiles
@@ -34,7 +34,7 @@ jobs:
   race:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v2
       - run: mise run web-install
       - run: mise run web-build
@@ -43,7 +43,7 @@ jobs:
   web:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: jdx/mise-action@v2
       - run: mise run web-install
       - name: svelte-check + tsc
