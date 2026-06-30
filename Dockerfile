@@ -13,7 +13,7 @@ RUN apk add --no-cache curl \
  && mv /tmp/db /dbip-country-lite.mmdb
 
 # 1) Build the SPA (once, on the native build platform — output is arch-independent)
-FROM --platform=$BUILDPLATFORM node:24-alpine AS web
+FROM --platform=$BUILDPLATFORM node:26-alpine AS web
 RUN npm install -g pnpm@11
 WORKDIR /app/web
 COPY web/package.json web/pnpm-lock.yaml ./
