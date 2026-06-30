@@ -28,6 +28,7 @@ export function connectSSE(url = '/api/events'): () => void {
       globals.apply(d.globals)
     },
     warn: (m) => console.warn(m),
+    onHealth: (h) => (globals.rtHealth = h),
   })
   const unsub = lifecycle.subscribe((s) => driver.signal(s))
   driver.start()

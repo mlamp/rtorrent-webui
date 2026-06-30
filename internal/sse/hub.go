@@ -31,10 +31,11 @@ func (s *Subscriber) kill() { s.once.Do(func() { close(s.closed) }) }
 // new subscriber gets full state immediately.
 type Hub struct {
 	mu         sync.RWMutex
-	subs       map[*Subscriber]struct{}
-	latestSnap *Message
-	onFirst    func()
-	onZero     func()
+	subs         map[*Subscriber]struct{}
+	latestSnap   *Message
+	latestStatus *Message // cached health (event: status) for new joiners
+	onFirst      func()
+	onZero       func()
 }
 
 func NewHub() *Hub {
@@ -59,6 +60,15 @@ func (h *Hub) SetSnapshot(m Message) {
 	h.mu.Unlock()
 }
 
+// SetStatus caches the latest health message so new subscribers learn current
+// rtorrent reachability on connect, not only on the next transition.
+func (h *Hub) SetStatus(m Message) {
+	h.mu.Lock()
+	mm := m
+	h.latestStatus = &mm
+	h.mu.Unlock()
+}
+
 // Subscribe registers a client; it immediately receives the latest snapshot.
 func (h *Hub) Subscribe() *Subscriber {
 	s := &Subscriber{ch: make(chan Message, 16), closed: make(chan struct{})}
@@ -67,6 +77,12 @@ func (h *Hub) Subscribe() *Subscriber {
 	if h.latestSnap != nil {
 		select {
 		case s.ch <- *h.latestSnap:
+		default:
+		}
+	}
+	if h.latestStatus != nil {
+		select {
+		case s.ch <- *h.latestStatus:
 		default:
 		}
 	}

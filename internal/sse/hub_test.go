@@ -83,6 +83,75 @@ func TestHubActivitySubscribeDuringPendingOnZero(t *testing.T) {
 	// zeroEntered; the hub needs no cleanup.
 }
 
+// drainOne reads one buffered message non-blocking; ok=false if none pending.
+func drainOne(sub *Subscriber) (Message, bool) {
+	select {
+	case m := <-sub.Ch():
+		return m, true
+	default:
+		return Message{}, false
+	}
+}
+
+// TestHubReplaysSnapshotAndStatus: a joiner gets the cached snapshot then the
+// cached health frame, contents intact, in that order.
+func TestHubReplaysSnapshotAndStatus(t *testing.T) {
+	h := NewHub()
+	snap := Message{Event: "snapshot", Data: []byte(`{"seq":7}`)}
+	status := Message{Event: "status", Data: []byte(`{"rtorrent":"unreachable"}`)}
+	h.SetSnapshot(snap)
+	h.SetStatus(status)
+
+	sub := h.Subscribe()
+	m1, ok1 := drainOne(sub)
+	m2, ok2 := drainOne(sub)
+	if !ok1 || !ok2 {
+		t.Fatalf("expected two buffered messages, got ok1=%v ok2=%v", ok1, ok2)
+	}
+	if m1.Event != "snapshot" || string(m1.Data) != string(snap.Data) {
+		t.Fatalf("first message = %+v, want cached snapshot", m1)
+	}
+	if m2.Event != "status" || string(m2.Data) != string(status.Data) {
+		t.Fatalf("second message = %+v, want cached status", m2)
+	}
+	if _, more := drainOne(sub); more {
+		t.Fatal("more than two replayed messages")
+	}
+}
+
+// TestHubStatusCacheReplacedNotAppended: SetStatus overwrites; a joiner sees
+// only the latest health, exactly once.
+func TestHubStatusCacheReplacedNotAppended(t *testing.T) {
+	h := NewHub()
+	h.SetStatus(Message{Event: "status", Data: []byte(`{"rtorrent":"up"}`)})
+	h.SetStatus(Message{Event: "status", Data: []byte(`{"rtorrent":"unreachable"}`)})
+
+	sub := h.Subscribe()
+	m, ok := drainOne(sub)
+	if !ok || m.Event != "status" || string(m.Data) != `{"rtorrent":"unreachable"}` {
+		t.Fatalf("first message = %+v ok=%v, want latest status only", m, ok)
+	}
+	if _, more := drainOne(sub); more {
+		t.Fatal("status cache appended instead of replaced")
+	}
+}
+
+// TestHubSubscribeNoStatusWhenUnset: with no SetStatus, a joiner gets the
+// snapshot and never a zero/empty status frame.
+func TestHubSubscribeNoStatusWhenUnset(t *testing.T) {
+	h := NewHub()
+	h.SetSnapshot(Message{Event: "snapshot", Data: []byte(`{"seq":1}`)})
+
+	sub := h.Subscribe()
+	m, ok := drainOne(sub)
+	if !ok || m.Event != "snapshot" {
+		t.Fatalf("first message = %+v ok=%v, want snapshot", m, ok)
+	}
+	if extra, more := drainOne(sub); more {
+		t.Fatalf("unexpected extra frame %+v (status replayed while unset)", extra)
+	}
+}
+
 // TestHubActivityCallbackOrderingStress hammers the same refresh interleaving
 // to catch orderings the gated test's fixed schedule might miss.
 func TestHubActivityCallbackOrderingStress(t *testing.T) {
