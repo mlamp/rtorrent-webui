@@ -6,7 +6,7 @@
   import { globals } from '$lib/stores/globals.svelte'
   import { view, matches, matchesExcept, isActive, compare, type StatusFilter } from '$lib/stores/view.svelte'
   import { lifecycle } from '$lib/stores/lifecycle.svelte'
-  import type { Connection } from '$lib/stores/globals.svelte'
+  import type { Connection, RtHealth } from '$lib/stores/globals.svelte'
   import { selection } from '$lib/stores/selection.svelte'
   import { detail } from '$lib/stores/detail.svelte'
   import { removeDialog } from '$lib/stores/removeDialog.svelte'
@@ -155,8 +155,7 @@
     { key: 'error', label: 'ERROR', mark: '!', count: () => counts.error },
   ]
 
-  // Record (not a ternary chain) so adding a Connection member is a compile
-  // error here instead of a silent fall-through to error-red.
+  // Transport axis — exhaustive over Connection (adding a member = compile error).
   const DOT: Record<Connection, string> = {
     live: 'bg-status-seed',
     connecting: 'bg-status-check',
@@ -164,8 +163,29 @@
     idle: 'bg-dim',
     offline: 'bg-status-error',
   }
+  // Health axis — consulted ONLY when transport is 'live'. Degraded reuses amber
+  // (page alive, upstream unreachable); kept distinct from transport-offline RED.
+  const LIVE_DOT: Record<RtHealth, string> = {
+    up: 'bg-status-seed',
+    down: 'bg-status-check',
+    stale: 'bg-status-check',
+    unknown: 'bg-status-check',
+  }
   const conn = $derived(globals.connection)
-  const connDot = $derived(DOT[conn])
+  const health = $derived(globals.rtHealth)
+  // Transport strictly wins unless genuinely live; only then does health decide.
+  const connDot = $derived(conn === 'live' ? LIVE_DOT[health] : DOT[conn])
+  const connLabel = $derived(
+    conn !== 'live'
+      ? conn
+      : health === 'up'
+        ? 'live'
+        : health === 'down'
+          ? 'rtorrent down'
+          : health === 'stale'
+            ? 'rtorrent stale'
+            : 'connecting',
+  )
 
   // ── global keyboard ─────────────────────────────────────────────────────────
   function selectAllVisible() {
@@ -423,7 +443,7 @@
   <footer class="flex h-7 shrink-0 items-center justify-between border-t border-line px-4 text-[11px] text-dim">
     <span class="flex items-center gap-2">
       <span class="inline-block size-1.5 rounded-full {connDot}" style="box-shadow:0 0 6px currentColor"></span>
-      {conn} · {globals.torrentCount} torrents · {counts.seeding} seeding · {counts.downloading} downloading
+      {connLabel} · {globals.torrentCount} torrents · {counts.seeding} seeding · {counts.downloading} downloading
     </span>
     <span>{rtVersion}</span>
   </footer>

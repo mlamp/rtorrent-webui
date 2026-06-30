@@ -4,6 +4,9 @@ import type { GlobalsWire } from '$lib/types/torrent'
 // reconnects with a fresh server snapshot on the next show.
 export type Connection = 'connecting' | 'live' | 'reconnecting' | 'idle' | 'offline'
 
+// rtorrent liveness, ORTHOGONAL to Connection (transport). Combined only at the dot.
+export type RtHealth = 'up' | 'down' | 'stale' | 'unknown'
+
 // Sidebar sparkline window: keep the last ~2 minutes of live samples. Short and
 // per-tick so the sidebar graph stays snappy/reactive (the longer historical view
 // lives in the Insight panel).
@@ -19,6 +22,7 @@ class GlobalsState {
   torrentCount = $state(0)
   activeCount = $state(0)
   connection = $state<Connection>('connecting')
+  rtHealth = $state<RtHealth>('unknown')
 
   // increments once per poll snapshot/delta. Components that keep their OWN
   // rolling per-torrent buffers (grid cards, the open detail graph) depend on

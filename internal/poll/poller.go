@@ -25,6 +25,10 @@ import (
 // pollTimeout bounds one multicall round-trip (independent of cadence).
 const pollTimeout = 15 * time.Second
 
+// unreachableAfter is how many consecutive failed polls before we signal rtorrent
+// unreachable. Debounces restart-loop flapping; recovery is immediate.
+const unreachableAfter = 3
+
 // Source produces the current torrent list + globals for one tick.
 type Source func(ctx context.Context) ([]model.Torrent, model.Globals, error)
 
@@ -47,6 +51,9 @@ type Poller struct {
 
 	prev map[string]model.Torrent
 	seq  uint64
+
+	consecFails int    // consecutive poll failures (reset on success)
+	health      string // "" unknown | model.RtorrentUp | model.RtorrentUnreachable
 }
 
 func New(src Source, hub *sse.Hub, live, idle time.Duration, logger *log.Logger) *Poller {
@@ -140,7 +147,18 @@ func (p *Poller) tick() {
 	cancel()
 	if err != nil {
 		p.log.Printf("poll error: %v", err)
+		p.consecFails++
+		// Transition to unreachable only after the debounce; idempotent thereafter.
+		if p.health != model.RtorrentUnreachable && p.consecFails >= unreachableAfter {
+			p.setHealth(model.RtorrentUnreachable)
+		}
 		return
+	}
+	// Success: recovery is immediate, counter resets. The first-ever success also
+	// publishes the initial "up" (health == "") so joiners have a cached status.
+	p.consecFails = 0
+	if p.health != model.RtorrentUp {
+		p.setHealth(model.RtorrentUp)
 	}
 
 	p.seq++
@@ -181,6 +199,20 @@ func (p *Poller) tick() {
 		delta := model.Delta{Seq: p.seq, TS: ts, Globals: globals, Upserts: upserts, Removed: removed}
 		p.hub.Broadcast(sse.Message{Event: "delta", Data: mustJSON(p.log, delta)})
 	}
+}
+
+// setHealth records a reachability transition, caches it on the hub for new
+// joiners, then broadcasts it. Called only from tick().
+func (p *Poller) setHealth(state string) {
+	p.health = state
+	msg := sse.Message{Event: "status", Data: mustJSON(p.log, model.HealthMsg{
+		Rtorrent:         state,
+		Since:            time.Now().Unix(),
+		ConsecutiveFails: p.consecFails,
+	})}
+	p.hub.SetStatus(msg) // cache first so a Subscribe racing the Broadcast still gets it
+	p.hub.Broadcast(msg)
+	p.log.Printf("rtorrent health: %s (consecutiveFails=%d)", state, p.consecFails)
 }
 
 func mustJSON(l *log.Logger, v any) []byte {

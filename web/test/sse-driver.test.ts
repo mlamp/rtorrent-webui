@@ -1,4 +1,4 @@
-import { createSseDriver, HIDDEN_GRACE_MS, type ESLike, type ConnState } from '../src/lib/sse-driver.ts'
+import { createSseDriver, HIDDEN_GRACE_MS, HEALTH_STALE_MS, type ESLike, type ConnState, type RtHealth } from '../src/lib/sse-driver.ts'
 
 let pass = 0,
   fail = 0
@@ -26,7 +26,7 @@ class FakeES implements ESLike {
   close() {
     this.readyState = 2
   }
-  addEventListener(type: 'open' | 'snapshot' | 'delta' | 'error', fn: (e: { data?: string }) => void) {
+  addEventListener(type: 'open' | 'snapshot' | 'delta' | 'error' | 'status', fn: (e: { data?: string }) => void) {
     const a = this.listeners.get(type) ?? []
     a.push(fn)
     this.listeners.set(type, a)
@@ -82,12 +82,13 @@ class VirtualClock {
   }
 }
 
-function makeEnv(opts: { visible?: boolean; faulty?: boolean } = {}) {
+function makeEnv(opts: { visible?: boolean; faulty?: boolean; health?: boolean } = {}) {
   const clock = new VirtualClock(opts.faulty)
   const created: FakeES[] = []
   let visible = opts.visible ?? true
   const connLog: ConnState[] = []
   const warns: string[] = []
+  const healthLog: RtHealth[] = []
   let snapshots = 0
   let deltas = 0
   const driver = createSseDriver('/api/events', {
@@ -105,6 +106,7 @@ function makeEnv(opts: { visible?: boolean; faulty?: boolean } = {}) {
     applySnapshot: () => snapshots++,
     applyDelta: () => deltas++,
     warn: (m) => warns.push(m),
+    onHealth: opts.health ? (h) => healthLog.push(h) : undefined,
   })
   const env = {
     clock,
@@ -112,17 +114,20 @@ function makeEnv(opts: { visible?: boolean; faulty?: boolean } = {}) {
     driver,
     connLog,
     warns,
+    healthLog,
     setVisible: (v: boolean) => (visible = v),
     counts: () => ({ snapshots, deltas }),
     cur: () => created[created.length - 1],
     liveCount: () => created.filter((e) => e.readyState !== 2).length,
     conn: () => connLog[connLog.length - 1],
+    health: () => driver._debug().health, // authoritative current health (initial 'unknown' is never re-emitted)
     // dispatch helpers on the CURRENT ES with server ts = client now + offset
     open: () => env.cur().dispatch('open'),
     snap: (seq = 1, tsOffsetS = 0) =>
       env.cur().dispatch('snapshot', JSON.stringify({ seq, ts: clock.now() / 1000 + tsOffsetS, globals: {}, torrents: [] })),
     delta: (seq: number, tsOffsetS = 0) =>
       env.cur().dispatch('delta', JSON.stringify({ seq, ts: clock.now() / 1000 + tsOffsetS, globals: {}, upserts: [], removed: null })),
+    status: (rt: string, since = 0) => env.cur().dispatch('status', JSON.stringify({ rtorrent: rt, since })),
   }
   return env
 }
@@ -136,6 +141,10 @@ function invariantViolation(env: Env, visible: boolean): string | null {
   if (!visible && d.retryPending) return 'retry timer pending while hidden'
   if (d.conn === 'idle' && (d.hasES || d.retryPending || d.gracePending)) return `idle but hasES=${d.hasES} retry=${d.retryPending} grace=${d.gracePending}`
   if (d.gracePending && !d.hasES) return 'grace pending without an ES'
+  // Health watchdog must never outlive the transport that armed it (invariant 9);
+  // inert for the health-less fuzz envs (healthPending is always false there).
+  if (d.conn === 'idle' && d.healthPending) return 'watchdog pending while idle'
+  if (!visible && d.healthPending) return 'watchdog pending while hidden'
   return null
 }
 
@@ -447,6 +456,131 @@ function invariantViolation(env: Env, visible: boolean): string | null {
     if (v) bad = `op ${i} (${op}): ${v}`
   }
   ok('D15 500-op seeded fuzz holds every invariant', bad === null, bad ?? '')
+}
+
+// ── D16: green needs a datum — transport open alone is not 'up'
+{
+  const env = makeEnv({ health: true })
+  env.driver.start()
+  env.open()
+  ok('D16 transport open is not green until a datum', env.health() === 'unknown')
+  env.snap(1)
+  ok('D16 first snapshot turns health up', env.health() === 'up')
+}
+
+// ── D17: silence watchdog → stale, then recovery, with NO reconnect
+{
+  const env = makeEnv({ health: true })
+  env.driver.start()
+  env.open()
+  env.snap(1)
+  ok('D17 up after snapshot', env.health() === 'up')
+  env.clock.advance(HEALTH_STALE_MS + 1000)
+  ok('D17 silence trips stale without recycling the ES', env.health() === 'stale' && env.created.length === 1 && env.cur().readyState === 1)
+  env.delta(2)
+  ok('D17 a fresh datum clears stale back to up', env.health() === 'up')
+}
+
+// ── D18: no flap below the staleness window
+{
+  const env = makeEnv({ health: true })
+  env.driver.start()
+  env.open()
+  env.snap(1)
+  let seq = 2
+  for (let i = 0; i < 5; i++) {
+    env.clock.advance(HEALTH_STALE_MS - 1000)
+    env.delta(seq++)
+  }
+  ok('D18 steady traffic stays up', env.health() === 'up' && !env.healthLog.includes('stale'))
+}
+
+// ── D19: joiner-while-down beats a cached snapshot, regardless of arrival order
+{
+  const a = makeEnv({ health: true })
+  a.driver.start()
+  a.open()
+  a.snap(1)
+  a.status('unreachable')
+  ok('D19 snapshot-then-status resolves down', a.health() === 'down')
+
+  const b = makeEnv({ health: true })
+  b.driver.start()
+  b.open()
+  b.status('unreachable')
+  b.snap(1)
+  ok('D19 status-then-snapshot resolves down (snapshot cannot mask it)', b.health() === 'down')
+}
+
+// ── D20: recovery sequence — down → unknown (de-escalated) → up only on a datum
+{
+  const env = makeEnv({ health: true })
+  env.driver.start()
+  env.open()
+  env.status('unreachable')
+  ok('D20 status:unreachable → down', env.health() === 'down')
+  env.status('up')
+  ok('D20 status:up de-escalates to unknown, not straight to green', env.health() === 'unknown')
+  env.delta(2)
+  ok('D20 next datum confirms up', env.health() === 'up')
+}
+
+// ── D21: transport wins; the watchdog is cleared on a transport drop and the
+// cached status is re-shown after reconnect
+{
+  const env = makeEnv({ health: true })
+  env.driver.start()
+  env.open()
+  env.status('unreachable')
+  ok('D21 down while live', env.health() === 'down' && env.conn() === 'live')
+  env.cur().dispatch('error') // visible → reconnecting
+  ok('D21 transport drop → reconnecting, watchdog cleared', env.conn() === 'reconnecting' && env.driver._debug().healthPending === false)
+  env.clock.advance(2000) // retry fires → new ES
+  env.open()
+  env.status('unreachable')
+  env.snap(1)
+  ok('D21 re-shows down from the replayed status', env.health() === 'down')
+}
+
+// ── D22: hide clears the watchdog, show (recently talking) re-arms it
+{
+  const env = makeEnv({ health: true })
+  env.driver.start()
+  env.open()
+  env.snap(1)
+  env.setVisible(false)
+  env.driver.signal('hide')
+  ok('D22 hide clears the watchdog, leaving only the grace timer', env.driver._debug().healthPending === false && env.clock.pending.size === 1)
+  env.setVisible(true)
+  env.driver.signal('show') // recently talking → ES kept, watchdog re-armed
+  ok('D22 show re-arms the watchdog on the kept stream', env.driver._debug().healthPending === true)
+}
+
+// ── D23: no-onHealth parity — the gate keeps the transport machine pristine
+{
+  const env = makeEnv() // no health
+  env.driver.start()
+  env.open()
+  env.snap(1)
+  const pendingBefore = env.clock.pending.size
+  env.clock.advance(HEALTH_STALE_MS + 5000)
+  ok('D23 no HEALTH_STALE_MS timer is ever scheduled', !env.clock.scheduled.includes(HEALTH_STALE_MS))
+  ok('D23 pending-timer count matches the health-less baseline', env.clock.pending.size === pendingBefore && env.driver._debug().healthPending === false)
+}
+
+// ── D24: green→amber→green on ONE connection (the empirically-validated bug)
+{
+  const env = makeEnv({ health: true })
+  env.driver.start()
+  env.open()
+  env.snap(1)
+  ok('D24 starts live+up', env.conn() === 'live' && env.health() === 'up')
+  env.status('unreachable') // rtorrent dies; SSE transport stays warm
+  ok('D24 rtorrent down does NOT drop the transport', env.health() === 'down' && env.conn() === 'live')
+  env.status('up')
+  env.delta(2)
+  ok('D24 recovers to up on the same connection', env.health() === 'up')
+  ok('D24 transport never flapped while rtorrent died and recovered', !env.connLog.includes('reconnecting') && !env.connLog.includes('offline'))
 }
 
 console.log(`sse-driver: ${pass} passed, ${fail} failed`)
