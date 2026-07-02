@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       - run: mise run web-install
       - run: mise run web-build # web/dist must exist before go:embed compiles
       - run: go build ./...
@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       - run: mise run web-install
       - run: mise run web-build
       - run: mise run test-race # CGO_ENABLED=1 is set by the mise task
@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
       - run: mise run web-install
       - name: svelte-check + tsc
         run: cd web && pnpm run check
