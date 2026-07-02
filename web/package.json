@@ -11,7 +11,7 @@
     "test:unit": "for f in test/*.test.ts; do node --experimental-strip-types \"$f\" || exit 1; done"
   },
   "devDependencies": {
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "^1.61.1",
     "@sveltejs/vite-plugin-svelte": "^7.1.2",
     "@tailwindcss/vite": "^4.3.0",
     "@tsconfig/svelte": "^5.0.8",
