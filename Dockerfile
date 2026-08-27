@@ -24,7 +24,7 @@ RUN pnpm run build   # -> /app/web/dist
 RUN cp "$(readlink -f node_modules/@fontsource/jetbrains-mono/LICENSE)" /OFL-1.1.txt
 
 # 2) Build the Go binary with the SPA embedded (native host, cross-compiled)
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
 WORKDIR /src
